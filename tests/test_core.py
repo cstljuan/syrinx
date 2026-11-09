@@ -166,6 +166,22 @@ def test_summaries_for_other_tools():
     assert core.summarize_tool_call("terminal", {"command": ""}) == "terminal"
 
 
+def test_pane_answers_are_delivered_once_and_snapshot_is_complete():
+    k, _ = make()
+    k.start_focus(10)
+    item = k.park("Tabs or spaces?", "spaces", session_id="s1")
+    assert k.take_answered() == []
+    assert k.answer("nope", "x") is None
+    assert k.answer(item["id"], "tabs")["status"] == "answered"
+    fresh = k.take_answered()
+    assert len(fresh) == 1 and fresh[0]["answer"] == "tabs"
+    assert k.take_answered() == []
+    assert "tabs" in k.answers_context(fresh)
+    snap = k.snapshot()
+    assert snap["focus"]["active"] and snap["night"]["cutoff"] == "22:30"
+    assert snap["parked"] == [] and "Kairos receipt" in snap["receipt"]
+
+
 def test_focus_restart_closes_previous_block():
     k, clock = make()
     k.start_focus(30)

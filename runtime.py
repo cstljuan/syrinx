@@ -104,6 +104,15 @@ class Runtime:
             except Exception:
                 logger.debug("kairos: status post failed", exc_info=True)
 
+    def _changed(self, kind: str) -> None:
+        """Tell the Desktop half (pane, chip, pet bubble) that state moved. No-op without Desktop."""
+        try:
+            from hermes_cli.plugin_events import broadcast_plugin_event  # type: ignore
+
+            broadcast_plugin_event("kairos", "state.changed", {"kind": kind, "line": self.k.status_line()})
+        except Exception:
+            logger.debug("kairos: broadcast skipped", exc_info=True)
+
     def _llm(self, prompt: str) -> str:
         result = self.ctx.llm.complete(
             messages=[{"role": "user", "content": prompt}],
@@ -120,7 +129,10 @@ class Runtime:
         try:
             if tool_name != "clarify":
                 return None
-            return self.k.clarify_directive(args or {}, session_id=session_id or task_id)
+            directive = self.k.clarify_directive(args or {}, session_id=session_id or task_id)
+            if directive is not None:
+                self._changed("parked")
+            return directive
         except Exception:
             logger.debug("kairos: pre_tool_call failed open", exc_info=True)
             return None
@@ -145,16 +157,24 @@ class Runtime:
             # Night: queue the request and stop the turn before any inference.
             if self.k.is_night() and text.strip() and not text.lstrip().startswith("/"):
                 self.k.queue_for_morning(text, session_id=session_id)
+                self._changed("queued")
                 return {"action": "block", "message": self.k.night_block_message()}
 
             # Morning: hand over what was queued, once.
             morning = self.k.take_morning_brief()
             if morning:
                 contexts.append(self.k.morning_context(morning, late=self.k.late_active()))
+                self._changed("morning")
 
             # Return from a focus block: catch-up plus the parked questions, once.
             if self.k.take_pending_return():
                 contexts.append(self.k.return_context(session_id))
+                self._changed("returned")
+
+            # Answers typed in the Kairos pane since the last turn.
+            answered = self.k.take_answered()
+            if answered:
+                contexts.append(self.k.answers_context(answered))
 
             # During a block: tell the agent how to behave.
             focus = self.k.focus()
@@ -197,6 +217,7 @@ class Runtime:
             if not str(question).strip():
                 return _json_error("question is required")
             item = self.k.park(question, default, why, session_id=session_id or task_id)
+            self._changed("parked")
             return _json({"parked": item["id"], "proceed_with": item["default"],
                           "note": "Continue with the default and say so in your reply."})
         except Exception as exc:
@@ -233,6 +254,7 @@ class Runtime:
             ended = self.k.end_focus("manual")
             if not ended.get("ended"):
                 return "No focus block is running."
+            self._changed("flow_off")
             tail = f" {ended['parked']} question{'s' if ended['parked'] != 1 else ''} parked; /catchup hands them back." \
                 if ended.get("parked") else ""
             return f"Focus ended: {core.fmt_minutes(ended['minutes'])} kept.{tail}"
@@ -245,6 +267,7 @@ class Runtime:
         focus = self.k.start_focus(minutes)
         until = core.datetime.fromisoformat(focus["until"])
         self._post_status(session_id)
+        self._changed("flow_on")
         return (f"Focus until {core.fmt_clock(until)} ({focus['minutes']} min). The agent keeps working and parks its "
                 "questions. Approvals still reach you. /flow off ends it early.")
 
@@ -264,6 +287,7 @@ class Runtime:
     def cmd_late(self, raw_args: str = "", **kwargs: Any) -> str:
         match = re.match(r"\s*(\d{1,3})", raw_args or "")
         until = self.k.late(int(match.group(1)) if match else None)
+        self._changed("late")
         return f"Okay. Kairos steps aside until {core.fmt_clock(until)}. It will remind you once after that."
 
     def cmd_night(self, raw_args: str = "", **kwargs: Any) -> str:

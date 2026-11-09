@@ -274,13 +274,60 @@ class Kairos:
         with self._lock:
             parked = self._get("parked", [])
             for item in parked:
-                if item.get("id") == item_id and item.get("status") == "parked":
+                if item.get("id") == item_id and item.get("status") in ("parked", "handed_back"):
                     item["status"] = "answered"
                     item["answer"] = str(text or "").strip()[:500]
                     item["answered"] = self.now().isoformat()
+                    item["delivered"] = False
                     self._set("parked", parked)
                     return item
             return None
+
+    def take_answered(self) -> list[dict[str, Any]]:
+        """Answers given outside the chat (the Desktop pane) that the agent has not seen yet."""
+        with self._lock:
+            parked = self._get("parked", [])
+            fresh = [item for item in parked if item.get("status") == "answered" and not item.get("delivered", True)]
+            for item in fresh:
+                item["delivered"] = True
+            if fresh:
+                self._set("parked", parked)
+            return [dict(item) for item in fresh]
+
+    def answers_context(self, items: list[dict[str, Any]]) -> str:
+        lines = [f"Kairos: the user answered {len(items)} parked question{'s' if len(items) != 1 else ''} in the "
+                 "Kairos pane. Apply each answer; redo any piece where it differs from the default you used:"]
+        for item in items:
+            lines.append(f"- {item['id']}: \"{item['question']}\" -> {item['answer']} (default used: {item['default']})")
+        return "\n".join(lines)
+
+    def snapshot(self) -> dict[str, Any]:
+        """Everything a UI needs, in one read."""
+        focus = self.focus()
+        now = self.now()
+        return {
+            "status_line": self.status_line(),
+            "now": now.isoformat(),
+            "focus": {
+                "active": bool(focus.get("active")),
+                "until": focus.get("until") if focus.get("active") else None,
+                "minutes": focus.get("minutes") if focus.get("active") else None,
+                "remaining_minutes": self.focus_remaining_minutes(),
+                "elapsed_minutes": self.focus_elapsed_minutes(),
+                "last_minutes": focus.get("last_minutes"),
+            },
+            "night": {
+                "enabled": bool(self.config.get("night_enabled", True)),
+                "is_night": self.is_night(),
+                "late_active": self.late_active(),
+                "cutoff": self.cutoff().strftime("%H:%M"),
+                "wake": self.wake().strftime("%H:%M"),
+                "queued": self.queued_open(),
+            },
+            "parked": [item for item in self._get("parked", []) if item.get("status") in ("parked", "handed_back")],
+            "stats": self.stats(),
+            "receipt": self.receipt_text(),
+        }
 
     def hand_back(self) -> list[dict[str, Any]]:
         """Mark every open question as handed back to the person (the agent will ask them in one

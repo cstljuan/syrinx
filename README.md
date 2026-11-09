@@ -11,7 +11,9 @@ Kairos is a Hermes Agent plugin. It does four things, all of them with hooks tha
 3. **Night.** After your cutoff (10:30 PM by default), a new request is queued instead of started, with a kind note. It arrives as a morning brief at your wake time, and the agent starts on it. `/late 20` is the guilt-free override.
 4. **Receipt.** `/kairos receipt` shows the time it gave back: focus kept, questions batched, late nights queued.
 
-In the Hermes Desktop app and the TUI, a one-line status (`Kairos · focus until 3:45 PM · 12 min in · 2 parked`) is kept up to date in place. If you have a Hermes pet, the pet carries the same line.
+In the Hermes Desktop app and the TUI, a one-line status (`Kairos · focus until 3:45 PM · 12 min in · 2 parked`) is kept up to date in place.
+
+In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (now, the parked questions with a "keep default" button and an answer field, the night queue, the receipt), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
 
 ## Install
 
@@ -52,13 +54,14 @@ Settings live under `plugins.entries.kairos.settings` (also editable in Desktop 
 | Count the interruptions that still had to reach you | `on_human_input_request` for approvals and sudo prompts |
 | The live status line | `ctx.post_message` and `handle.edit` |
 | Tighten the catch-up (optional) | `ctx.llm.complete` on the user's own active model, no overrides |
+| Desktop chip, pane and pet lines | `desktop/plugin.js` on the Desktop plugin SDK; `dashboard/plugin_api.py` routes under `/api/plugins/kairos/`; `broadcast_plugin_event` for live updates |
 
 State is profile-scoped plugin state (`ctx.state`), under the Hermes plugin data directory. Nothing is written into the plugin folder.
 
 ## Disclosure
 
 - **No network calls.** Kairos makes none of its own. The optional catch-up tightening goes through `ctx.llm` on whatever provider and model you already use.
-- **No shell commands, no background processes, no binaries.**
+- **No shell commands, no background processes, no binaries.** The Desktop half is plain ES module source that only imports the plugin SDK and React; the backend is a FastAPI router mounted by Hermes behind the dashboard's own auth gate, reachable only from the connected Desktop app.
 - **Approvals are untouched.** Kairos never auto-approves, never answers a prompt, and never changes approval routing. It only blocks the agent's own `clarify` questions during a focus block and tells the agent to continue with the default it had in mind.
 - **Stored data:** focus blocks and their lengths, parked questions and the defaults taken, queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `kairos_status` exposes only flags and counts to the model.
 - **Unattended runs:** cron-driven turns are never blocked or queued. Night and Flow only act on turns a person started.

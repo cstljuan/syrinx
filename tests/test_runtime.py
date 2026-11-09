@@ -148,6 +148,15 @@ def test_night_blocks_and_morning_delivers(rt):
     assert "morning brief" in morning["context"] and "one more thing" in morning["context"]
 
 
+def test_pane_answers_reach_the_agent_next_turn(rt):
+    r, ctx, _ = rt
+    item = r.k.park("Which port?", "8080", session_id="s1")
+    r.k.answer(item["id"], "9090")
+    turn = ctx.hooks["pre_llm_call"](session_id="s1", user_message="hey", platform="cli")
+    assert "Kairos pane" in turn["context"] and "9090" in turn["context"]
+    assert ctx.hooks["pre_llm_call"](session_id="s1", user_message="hey", platform="cli") is None
+
+
 def test_cron_turns_are_never_blocked(rt):
     r, ctx, clock = rt
     clock["t"] = datetime.fromisoformat("2026-11-10 23:05")
