@@ -25,7 +25,9 @@ HELP = (
     "/catchup               what happened, and hand back the parked questions\n"
     "/late [minutes]        keep working past the cutoff for a while\n"
     "/night HH:MM [HH:MM]   set the cutoff and, optionally, the morning time\n"
-    "/kairos [receipt]      status, or the time receipt"
+    "/kairos [receipt|week] status, the time receipt, or the last 7 days\n"
+    "/kairos auto on|off    auto-focus from presence (macOS)\n"
+    "/kairos night on|off   queue late-night requests, or not"
 )
 
 
@@ -344,8 +346,26 @@ class Runtime:
         arg = (raw_args or "").strip().lower()
         if arg in ("receipt", "stats"):
             return self.k.receipt_text()
+        if arg == "week":
+            return self.k.week_text()
         if arg in ("help", "?"):
             return HELP
+        parts = arg.split()
+        if len(parts) == 2 and parts[0] in ("auto", "night") and parts[1] in ("on", "off"):
+            key = "auto_focus" if parts[0] == "auto" else "night_enabled"
+            value = parts[1] == "on"
+            if key == "auto_focus" and value and not presence.is_supported():
+                return "Auto-focus needs macOS. On this system Kairos cannot read idle time or the front app."
+            self.k.config[key] = value
+            try:
+                self.ctx.set_config(key, value)
+            except Exception:
+                logger.debug("kairos: set_config failed", exc_info=True)
+            self._changed("settings")
+            if key == "auto_focus":
+                return ("Auto-focus on: a block opens when you are active in another app and ends when a Hermes app is in front."
+                        if value else "Auto-focus off. /flow still works by hand.")
+            return "Night on: requests after the cutoff are queued for the morning." if value else "Night off."
         return self.k.status_text() + "\n\n" + HELP
 
 

@@ -182,6 +182,19 @@ def test_pane_answers_are_delivered_once_and_snapshot_is_complete():
     assert snap["parked"] == [] and "Kairos receipt" in snap["receipt"]
 
 
+def test_week_text_and_necessary_interruptions():
+    k, clock = make("2026-11-10 15:00")
+    k.start_focus(10)
+    k._bump("interruptions_necessary")
+    clock.advance(minutes=11)
+    k.focus()
+    week = k.week_text()
+    assert week.startswith("Kairos, last 7 days") and "today: 10 min focus" in week
+    assert "Approvals that still reached you during focus: 1." in k.receipt_text()
+    snap = k.snapshot()
+    assert snap["parked"] == []
+
+
 def test_focus_restart_closes_previous_block():
     k, clock = make()
     k.start_focus(30)

@@ -207,6 +207,20 @@ def test_hooks_never_raise(rt):
     assert ctx.hooks["on_human_input_request"](kind="approval", request_id="r") is None
 
 
+def test_kairos_toggles_and_week(rt, monkeypatch):
+    r, ctx, _ = rt
+    ctx.set_config = lambda key, value: ctx.config.__setitem__(key, value)
+    assert "Night off" in ctx.commands["kairos"]("night off")
+    assert r.k.config["night_enabled"] is False and ctx.config["night_enabled"] is False
+    import importlib
+    presence = importlib.import_module(f"{os.path.basename(ROOT)}.presence")
+    monkeypatch.setattr(presence.platform, "system", lambda: "Linux")
+    assert "needs macOS" in ctx.commands["kairos"]("auto on")
+    monkeypatch.setattr(presence.platform, "system", lambda: "Darwin")
+    assert "Auto-focus on" in ctx.commands["kairos"]("auto on")
+    assert "last 7 days" in ctx.commands["kairos"]("week")
+
+
 def test_commands_text(rt):
     r, ctx, _ = rt
     assert "Kairos commands" in ctx.commands["kairos"]("help")

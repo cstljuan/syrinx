@@ -336,7 +336,7 @@ class Kairos:
                 "wake": self.wake().strftime("%H:%M"),
                 "queued": self.queued_open(),
             },
-            "parked": [item for item in self._get("parked", []) if item.get("status") in ("parked", "handed_back")],
+            "parked": self.parked_open(),
             "stats": self.stats(),
             "receipt": self.receipt_text(),
         }
@@ -638,6 +638,24 @@ class Kairos:
         lines.append(f"Focus kept: {fmt_minutes(minutes)} across {blocks} block{'s' if blocks != 1 else ''}.")
         lines.append(f"Questions parked: {parked}, handed back in batches: {batched}, urgent interruptions: {urgent}.")
         lines.append(f"Late-night requests queued for the morning: {queued}.")
+        necessary = int(stats.get("interruptions_necessary", 0))
+        if necessary:
+            lines.append(f"Approvals that still reached you during focus: {necessary}.")
+        return "\n".join(lines)
+
+    def week_text(self) -> str:
+        """The last seven days, one line each, from the per-day counters."""
+        days = self._get("stats", {}).get("days", {})
+        lines = ["Kairos, last 7 days"]
+        today = self.now().date()
+        for offset in range(6, -1, -1):
+            day = (today - timedelta(days=offset)).isoformat()
+            row = days.get(day, {})
+            kept = fmt_minutes(int(row.get("focus_minutes", 0)))
+            parked = int(row.get("questions_parked", 0))
+            queued = int(row.get("requests_queued", 0))
+            label = "today" if offset == 0 else datetime.fromisoformat(day).strftime("%a")
+            lines.append(f"{label:>5}: {kept} focus, {parked} parked, {queued} queued")
         return "\n".join(lines)
 
     def status_text(self) -> str:
