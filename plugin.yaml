@@ -36,3 +36,15 @@ config_schema:
     type: bool
     default: true
     description: "Queue late-night requests for the morning. Set false to keep only the focus features."
+  auto_focus:
+    type: bool
+    default: false
+    description: "macOS only. Open a focus block on its own when you are active in another app, and end it when a Hermes app is in front again. Reads idle time (ioreg) and the front app's bundle id (lsappinfo); stores neither."
+  auto_focus_minutes:
+    type: int
+    default: 30
+    description: "Length of an automatic focus block; it is extended while you stay in another app."
+  hermes_apps:
+    type: str
+    default: ""
+    description: "Extra bundle ids (comma separated) that count as 'you are with Hermes', on top of the Hermes Desktop app and common terminals."

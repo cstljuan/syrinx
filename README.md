@@ -15,6 +15,10 @@ In the Hermes Desktop app and the TUI, a one-line status (`Kairos · focus until
 
 In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (now, the parked questions with a "keep default" button and an answer field, the night queue, the receipt), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
 
+### Auto-focus (optional, macOS)
+
+Set `auto_focus: true` and Kairos opens a block on its own when you are active in another app (your editor, a browser), and ends it when a Hermes app or a terminal is in front again. Your next message then carries the catch-up. It reads two local facts, idle time (`ioreg`) and the front app's bundle id (`lsappinfo`), keeps neither, and is off by default.
+
 ## Install
 
 ```bash
@@ -41,6 +45,9 @@ Settings live under `plugins.entries.kairos.settings` (also editable in Desktop 
 | `wake` | `"08:00"` | When the night ends and the morning brief is delivered. |
 | `focus_minutes` | `45` | Length of `/flow` with no number. |
 | `night_enabled` | `true` | Set `false` to keep only the focus features. |
+| `auto_focus` | `false` | macOS only. Open and close focus blocks from presence (see above). |
+| `auto_focus_minutes` | `30` | Length of an automatic block; extended while you stay in another app. |
+| `hermes_apps` | `""` | Extra bundle ids, comma separated, that count as "you are with Hermes". |
 
 ## How it works
 
@@ -61,7 +68,8 @@ State is profile-scoped plugin state (`ctx.state`), under the Hermes plugin data
 ## Disclosure
 
 - **No network calls.** Kairos makes none of its own. The optional catch-up tightening goes through `ctx.llm` on whatever provider and model you already use.
-- **No shell commands, no background processes, no binaries.** The Desktop half is plain ES module source that only imports the plugin SDK and React; the backend is a FastAPI router mounted by Hermes behind the dashboard's own auth gate, reachable only from the connected Desktop app.
+- **Shell commands: two, read-only, and only when you turn `auto_focus` on.** `ioreg -c IOHIDSystem -d 4` for the idle time and `lsappinfo front` / `lsappinfo info` for the front app's bundle id, at most once every 10 seconds, with a 3 second timeout. The bundle id is compared in memory and never written anywhere. With `auto_focus` off (the default) Kairos runs no commands at all.
+- **No background processes, no binaries.** The Desktop half is plain ES module source that only imports the plugin SDK and React; the backend is a FastAPI router mounted by Hermes behind the dashboard's own auth gate, reachable only from the connected Desktop app.
 - **Approvals are untouched.** Kairos never auto-approves, never answers a prompt, and never changes approval routing. It only blocks the agent's own `clarify` questions during a focus block and tells the agent to continue with the default it had in mind.
 - **Stored data:** focus blocks and their lengths, parked questions and the defaults taken, queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `kairos_status` exposes only flags and counts to the model.
 - **Unattended runs:** cron-driven turns are never blocked or queued. Night and Flow only act on turns a person started.

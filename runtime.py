@@ -10,11 +10,14 @@ import json
 import logging
 import re
 import threading
+import time
 from typing import Any, Optional
 
-from . import core, schemas
+from . import core, presence, schemas
 
 logger = logging.getLogger(__name__)
+
+PRESENCE_CACHE_SECONDS = 10
 
 HELP = (
     "Kairos commands\n"
@@ -74,7 +77,8 @@ class Runtime:
     def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
         config = {}
-        for key, default in (("cutoff", "22:30"), ("wake", "08:00"), ("focus_minutes", 45), ("night_enabled", True)):
+        for key, default in (("cutoff", "22:30"), ("wake", "08:00"), ("focus_minutes", 45), ("night_enabled", True),
+                             ("auto_focus", False), ("auto_focus_minutes", 30), ("hermes_apps", "")):
             try:
                 config[key] = ctx.get_config(key, default=default)
             except Exception:
@@ -82,6 +86,38 @@ class Runtime:
         self.k = core.Kairos(_CtxStore(ctx), config=config)
         self._status_handles: dict[str, Any] = {}
         self._lock = threading.Lock()
+        self._presence_run = presence._run
+        self._presence_checked = 0.0
+        self._hermes_apps = presence.parse_apps(config.get("hermes_apps"))
+
+    # ----- presence (auto-focus) -------------------------------------------------------------
+
+    def presence_tick(self, *, force: bool = False) -> None:
+        """Open or close an automatic focus block from the OS presence probe. Off unless
+        ``auto_focus`` is set; never runs more than once per PRESENCE_CACHE_SECONDS."""
+        if not bool(self.k.config.get("auto_focus", False)):
+            return
+        now = time.monotonic()
+        if not force and now - self._presence_checked < PRESENCE_CACHE_SECONDS:
+            return
+        self._presence_checked = now
+        if not presence.is_supported():
+            return
+        verdict = presence.heads_down_elsewhere(
+            idle=presence.idle_seconds(self._presence_run),
+            front=presence.front_bundle_id(self._presence_run),
+            hermes_apps=self._hermes_apps,
+        )
+        focus = self.k.focus()
+        if verdict is True and not focus.get("active"):
+            minutes = int(self.k.config.get("auto_focus_minutes", 30) or 30)
+            self.k.start_focus(minutes, source="auto")
+            self._changed("flow_on")
+        elif verdict is True and focus.get("active") and focus.get("source") == "auto":
+            self.k.extend_focus(int(self.k.config.get("auto_focus_minutes", 30) or 30))
+        elif verdict is False and focus.get("active") and focus.get("source") == "auto":
+            self.k.end_focus("back")
+            self._changed("flow_off")
 
     # ----- helpers ---------------------------------------------------------------------------
 
@@ -143,6 +179,7 @@ class Runtime:
             if tool_name.startswith("kairos_"):
                 return
             self.k.record_tool(session_id or task_id, tool_name, args, duration_ms=duration_ms)
+            self.presence_tick()
         except Exception:
             logger.debug("kairos: post_tool_call failed", exc_info=True)
 
@@ -153,6 +190,7 @@ class Runtime:
                 return None
             text = user_message if isinstance(user_message, str) else ""
             contexts: list[str] = []
+            self.presence_tick(force=True)
 
             # Night: queue the request and stop the turn before any inference.
             if self.k.is_night() and text.strip() and not text.lstrip().startswith("/"):

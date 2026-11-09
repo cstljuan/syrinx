@@ -157,6 +157,40 @@ def test_pane_answers_reach_the_agent_next_turn(rt):
     assert ctx.hooks["pre_llm_call"](session_id="s1", user_message="hey", platform="cli") is None
 
 
+def test_auto_focus_opens_and_closes_from_presence(rt, monkeypatch):
+    r, ctx, clock = rt
+    import importlib
+    presence = importlib.import_module(f"{os.path.basename(ROOT)}.presence")
+    monkeypatch.setattr(presence.platform, "system", lambda: "Darwin")
+    r.k.config["auto_focus"] = True
+    state = {"front": "com.apple.Safari"}
+
+    def run(cmd):
+        if cmd[0] == "ioreg":
+            return '"HIDIdleTime" = 2000000000'
+        if cmd[:2] == ["lsappinfo", "front"]:
+            return "ASN:1"
+        return f'"CFBundleIdentifier"="{state["front"]}"'
+
+    r._presence_run = run
+    # Active in Safari: an automatic block opens.
+    ctx.hooks["post_tool_call"](tool_name="read_file", args={"path": "a.py"}, task_id="s1")
+    assert r.k.focus()["active"] and r.k.focus()["source"] == "auto"
+    # Back in Hermes: it closes and the next turn carries the catch-up.
+    state["front"] = "com.nousresearch.hermes"
+    clock["t"] = clock["t"].replace(minute=5)
+    turn = ctx.hooks["pre_llm_call"](session_id="s1", user_message="back", platform="desktop")
+    assert not r.k.focus()["active"]
+    assert "back from a focus block" in turn["context"]
+
+
+def test_auto_focus_is_off_by_default(rt):
+    r, ctx, _ = rt
+    r._presence_run = lambda cmd: (_ for _ in ()).throw(RuntimeError("must not run"))
+    ctx.hooks["post_tool_call"](tool_name="read_file", args={"path": "a.py"}, task_id="s1")
+    assert not r.k.focus().get("active")
+
+
 def test_cron_turns_are_never_blocked(rt):
     r, ctx, clock = rt
     clock["t"] = datetime.fromisoformat("2026-11-10 23:05")

@@ -166,6 +166,18 @@ class Kairos:
             self._bump("blocks_started")
             return focus
 
+    def extend_focus(self, minutes: int) -> None:
+        """Push the end of an active block out to at least ``minutes`` from now (auto-focus keeps
+        the block open while the person is still heads-down elsewhere)."""
+        with self._lock:
+            focus = self.focus()
+            if not focus.get("active"):
+                return
+            target = self.now() + timedelta(minutes=max(1, int(minutes)))
+            if target > datetime.fromisoformat(focus["until"]):
+                focus["until"] = target.isoformat()
+                self._set("focus", focus)
+
     def end_focus(self, reason: str = "manual") -> dict[str, Any]:
         with self._lock:
             focus = self.focus()
