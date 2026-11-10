@@ -12,6 +12,7 @@ import {
   Input,
   ScrollArea,
   Separator,
+  CopyButton,
   STATUSBAR_AREAS,
   PANES_AREA
 } from '@hermes/plugin-sdk'
@@ -213,7 +214,46 @@ function Night({ ctx, data }) {
   })
 }
 
-function Receipt({ data }) {
+function Week({ data }) {
+  const days = data.week || []
+  const peak = Math.max(1, ...days.map((d) => d.focus_minutes || 0))
+  const total = days.reduce((sum, d) => sum + (d.focus_minutes || 0), 0)
+  const W = 28
+  const G = 8
+  const H = 56
+  return jsx(Section, {
+    title: 'Last 7 days',
+    children: jsxs('div', {
+      className: 'flex flex-col gap-1',
+      children: [
+        jsx('svg', {
+          viewBox: `0 0 ${7 * (W + G) - G} ${H + 16}`,
+          className: 'w-full text-(--theme-primary)',
+          role: 'img',
+          'aria-label': `Focus kept per day, ${minutes(total)} this week`,
+          children: days.flatMap((d, i) => {
+            const v = d.focus_minutes || 0
+            const h = v ? Math.max(2, Math.round((H * v) / peak)) : 1
+            const last = i === days.length - 1
+            return [
+              jsx('rect', {
+                x: i * (W + G), y: H - h, width: W, height: h, rx: 2,
+                fill: 'currentColor', opacity: v ? (last ? 1 : 0.45) : 0.2
+              }, `b${i}`),
+              jsx('text', {
+                x: i * (W + G) + W / 2, y: H + 13, textAnchor: 'middle', fontSize: 9,
+                fill: 'currentColor', opacity: last ? 0.9 : 0.5, children: d.label
+              }, `t${i}`)
+            ]
+          })
+        }),
+        jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: `${minutes(total)} of focus kept this week` })
+      ]
+    })
+  })
+}
+
+function Receipt({ ctx, data }) {
   const s = data.stats || {}
   const rows = [
     ['Focus kept', minutes(s.focus_minutes || 0)],
@@ -225,12 +265,28 @@ function Receipt({ data }) {
   ]
   return jsx(Section, {
     title: 'Receipt',
-    children: jsx('div', {
-      className: 'grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-xs',
-      children: rows.flatMap(([k, v]) => [
-        jsx('div', { className: 'text-(--ui-text-tertiary)', children: k }, `k${k}`),
-        jsx('div', { className: 'text-right tabular-nums', children: v }, `v${k}`)
-      ])
+    children: jsxs('div', {
+      className: 'flex flex-col gap-2',
+      children: [
+        jsx('div', {
+          className: 'grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-xs',
+          children: rows.flatMap(([k, v]) => [
+            jsx('div', { className: 'text-(--ui-text-tertiary)', children: k }, `k${k}`),
+            jsx('div', { className: 'text-right tabular-nums', children: v }, `v${k}`)
+          ])
+        }),
+        // The shareable card is an SVG of these numbers only. Copying it is the whole export.
+        jsx('div', {
+          children: jsx(CopyButton, {
+            appearance: 'button',
+            buttonSize: 'sm',
+            buttonVariant: 'secondary',
+            label: 'Copy receipt card (SVG)',
+            text: async () => (await ctx.rest('/card')).svg,
+            children: 'Copy receipt card'
+          })
+        })
+      ]
     })
   })
 }
@@ -255,7 +311,9 @@ function Pane({ ctx }) {
         jsx(Separator, {}),
         jsx(Night, { ctx, data }),
         jsx(Separator, {}),
-        jsx(Receipt, { data }),
+        jsx(Week, { data }),
+        jsx(Separator, {}),
+        jsx(Receipt, { ctx, data }),
         jsx('div', {
           className: 'pt-2 text-[0.625rem] text-(--ui-text-quaternary)',
           children: 'Chronos is clock time. Kairos is the right moment.'

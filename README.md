@@ -9,11 +9,11 @@ Kairos is a Hermes Agent plugin. It does four things, all of them with hooks tha
 1. **Flow.** Start a focus block with `/flow 45`. While it runs, the agent's non-urgent questions are parked with the default it chose instead of pulling you back into the chat. The agent keeps working. Approvals and sudo prompts always reach you; Kairos never touches the approval system.
 2. **Return.** When the block ends, your next message gets a three-line catch-up of what happened and what changed, and the agent asks every parked question in one card. Pick differently and it redoes that piece.
 3. **Night.** After your cutoff (10:30 PM by default), a new request is queued instead of started, with a kind note. It arrives as a morning brief at your wake time, and the agent starts on it. `/late 20` is the guilt-free override.
-4. **Receipt.** `/kairos receipt` shows the time it gave back: focus kept, questions batched, late nights queued.
+4. **Receipt.** `/kairos receipt` shows the time it gave back: focus kept, questions batched, late nights queued. `/kairos week` shows the last seven days, and `/kairos card` saves the receipt as a shareable image that holds numbers only: no question text, no file names.
 
 In the Hermes Desktop app and the TUI, a one-line status (`Kairos · focus until 3:45 PM · 12 min in · 2 parked`) is kept up to date in place.
 
-In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (now, the parked questions with a "keep default" button and an answer field, the night queue, the receipt), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
+In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (now, the parked questions with a "keep default" button and an answer field, the night queue, seven daily bars, the receipt with a "copy receipt card" button), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
 
 ### Auto-focus (optional, macOS)
 
@@ -35,6 +35,8 @@ Then, in any session:
 /late 20          keep going past the cutoff for 20 minutes
 /night 22:30 08:00   set the cutoff and the morning time
 /kairos           status; /kairos receipt for the time receipt
+/kairos week      the last seven days
+/kairos card      save the receipt as a shareable image
 ```
 
 Settings live under `plugins.entries.kairos.settings` (also editable in Desktop under Settings, Plugins):
@@ -71,7 +73,7 @@ State is profile-scoped plugin state (`ctx.state`), under the Hermes plugin data
 - **Shell commands: two, read-only, and only when you turn `auto_focus` on.** `ioreg -c IOHIDSystem -d 4` for the idle time and `lsappinfo front` / `lsappinfo info` for the front app's bundle id, at most once every 10 seconds, with a 3 second timeout. The bundle id is compared in memory and never written anywhere. With `auto_focus` off (the default) Kairos runs no commands at all.
 - **No background processes, no binaries.** The Desktop half is plain ES module source that only imports the plugin SDK and React; the backend is a FastAPI router mounted by Hermes behind the dashboard's own auth gate, reachable only from the connected Desktop app.
 - **Approvals are untouched.** Kairos never auto-approves, never answers a prompt, and never changes approval routing. It only blocks the agent's own `clarify` questions during a focus block and tells the agent to continue with the default it had in mind.
-- **Stored data:** focus blocks and their lengths, parked questions and the defaults taken, queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `kairos_status` exposes only flags and counts to the model.
+- **Stored data:** focus blocks and their lengths, parked questions and the defaults taken, queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `/kairos card` writes one file, `kairos-receipt.svg`, into the same plugin data folder; it contains counters only. `kairos_status` exposes only flags and counts to the model.
 - **Unattended runs:** cron-driven turns are never blocked or queued. Night and Flow only act on turns a person started.
 - **No telemetry.**
 

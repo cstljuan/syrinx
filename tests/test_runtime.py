@@ -221,6 +221,18 @@ def test_kairos_toggles_and_week(rt, monkeypatch):
     assert "last 7 days" in ctx.commands["kairos"]("week")
 
 
+def test_kairos_card_saves_one_file_in_the_plugin_folder(rt, tmp_path):
+    r, ctx, _ = rt
+    ctx.state.data_dir = tmp_path / "plugin-data" / "kairos"
+    reply = ctx.commands["kairos"]("card")
+    saved = ctx.state.data_dir / "kairos-receipt.svg"
+    assert saved.exists() and str(saved) in reply and "numbers only" in reply
+    assert saved.read_text(encoding="utf-8").startswith("<svg")
+    # No data folder (an older host): the command still answers with the text receipt.
+    del ctx.state.data_dir
+    assert "could not save" in ctx.commands["kairos"]("card") and "Kairos receipt" in ctx.commands["kairos"]("card")
+
+
 def test_commands_text(rt):
     r, ctx, _ = rt
     assert "Kairos commands" in ctx.commands["kairos"]("help")

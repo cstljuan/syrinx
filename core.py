@@ -338,6 +338,7 @@ class Kairos:
             },
             "parked": self.parked_open(),
             "stats": self.stats(),
+            "week": self.card_data()["days"],
             "receipt": self.receipt_text(),
         }
 
@@ -657,6 +658,20 @@ class Kairos:
             label = "today" if offset == 0 else datetime.fromisoformat(day).strftime("%a")
             lines.append(f"{label:>5}: {kept} focus, {parked} parked, {queued} queued")
         return "\n".join(lines)
+
+    def card_data(self) -> dict[str, Any]:
+        """Numbers only, for the shareable receipt card: totals plus seven daily rows."""
+        stats = self._get("stats", {})
+        days = stats.get("days", {})
+        today = self.now().date()
+        rows = []
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            row = days.get(day.isoformat(), {})
+            rows.append({"label": day.strftime("%a"), "focus_minutes": int(row.get("focus_minutes", 0)),
+                         "questions_parked": int(row.get("questions_parked", 0))})
+        totals = {key: int(value) for key, value in stats.items() if key != "days" and isinstance(value, int)}
+        return {"date": today.strftime("%b %d, %Y").replace(" 0", " "), "totals": totals, "days": rows}
 
     def status_text(self) -> str:
         focus = self.focus()

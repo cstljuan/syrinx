@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from . import core, presence, schemas
+from . import card, core, presence, schemas
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ HELP = (
     "/late [minutes]        keep working past the cutoff for a while\n"
     "/night HH:MM [HH:MM]   set the cutoff and, optionally, the morning time\n"
     "/kairos [receipt|week] status, the time receipt, or the last 7 days\n"
+    "/kairos card           save the receipt as a shareable image (numbers only)\n"
     "/kairos auto on|off    auto-focus from presence (macOS)\n"
     "/kairos night on|off   queue late-night requests, or not"
 )
@@ -342,6 +343,19 @@ class Runtime:
         wake = core.datetime.combine(self.k.now().date(), self.k.wake())
         return f"Night set: cutoff {core.fmt_clock(cutoff)}, morning brief {core.fmt_clock(wake)}."
 
+    def _save_card(self) -> str:
+        """Write the receipt card into the plugin's own data folder and say where it is."""
+        svg = card.receipt_svg(self.k.card_data())
+        try:
+            folder = self.ctx.state.data_dir
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / "kairos-receipt.svg"
+            path.write_text(svg, encoding="utf-8")
+        except Exception:
+            logger.debug("kairos: could not save the card", exc_info=True)
+            return "Kairos could not save the card on this system.\n\n" + self.k.receipt_text()
+        return f"Receipt card saved: {path}\nIt holds numbers only, no question text and no file names.\n\n" + self.k.receipt_text()
+
     def cmd_kairos(self, raw_args: str = "", **kwargs: Any) -> str:
         arg = (raw_args or "").strip().lower()
         if arg in ("receipt", "stats"):
@@ -350,6 +364,8 @@ class Runtime:
             return self.k.week_text()
         if arg in ("help", "?"):
             return HELP
+        if arg == "card":
+            return self._save_card()
         parts = arg.split()
         if len(parts) == 2 and parts[0] in ("auto", "night") and parts[1] in ("on", "off"):
             key = "auto_focus" if parts[0] == "auto" else "night_enabled"
@@ -393,5 +409,5 @@ def register(ctx: Any) -> None:
     ctx.register_command("night", rt.cmd_night, description="Set the Kairos cutoff and morning time",
                          args_hint="HH:MM [HH:MM]")
     ctx.register_command("kairos", rt.cmd_kairos, description="Kairos status, receipt and help",
-                         args_hint="[receipt|help]")
+                         args_hint="[receipt|week|card|help]")
     return rt

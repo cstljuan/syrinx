@@ -20,15 +20,16 @@ router = APIRouter()
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
 
 
-def _load_core():
-    spec = importlib.util.spec_from_file_location("kairos_core_for_api", _PLUGIN_DIR / "core.py")
+def _load(name: str):
+    spec = importlib.util.spec_from_file_location(f"kairos_{name}_for_api", _PLUGIN_DIR / f"{name}.py")
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     assert spec and spec.loader
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
 
 
-_core = _load_core()
+_core = _load("core")
+_card = _load("card")
 
 
 def _settings() -> dict[str, Any]:
@@ -123,3 +124,9 @@ def night(body: dict) -> dict[str, Any]:
 def catchup() -> dict[str, Any]:
     k = _kairos()
     return {"text": k.catchup_text("*")}
+
+
+@router.get("/card")
+def card() -> dict[str, Any]:
+    """The shareable receipt card as SVG text. Numbers only."""
+    return {"svg": _card.receipt_svg(_kairos().card_data())}
