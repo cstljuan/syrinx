@@ -27,7 +27,7 @@ def test_card_is_valid_svg_with_the_numbers():
     svg = card.receipt_svg(k.card_data())
     root = ET.fromstring(svg)
     assert root.tag.endswith("svg") and root.attrib["viewBox"] == "0 0 1200 600"
-    assert "1h 30m" in svg and "questions parked" in svg
+    assert "1H 30M" in svg and "QUESTIONS PARKED" in svg
     # Numbers only: nothing the agent or the user wrote may reach the card.
     assert "SECRET-TOKEN" not in svg and "private" not in svg and "s1" not in svg
 
@@ -43,4 +43,4 @@ def test_card_data_has_seven_days_ending_today():
 
 def test_empty_card_still_renders():
     svg = card.receipt_svg({})
-    assert ET.fromstring(svg) is not None and "0 min" in svg
+    assert ET.fromstring(svg) is not None and "0 MIN" in svg
