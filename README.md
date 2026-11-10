@@ -13,11 +13,15 @@ Kairos is a Hermes Agent plugin. It does four things, all of them with hooks tha
 
 In the Hermes Desktop app and the TUI, a one-line status (`Kairos · focus until 3:45 PM · 12 min in · 2 parked`) is kept up to date in place.
 
-In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (now, the parked questions with a "keep default" button and an answer field, the night queue, seven daily bars, the receipt with a "copy receipt card" button), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
+In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (Argus at the top, whose tail eyes close while you are in flow and open one by one for each question he is holding; then now, the parked questions with a "keep default" button and an answer field, the night queue, seven daily bars, the receipt with a "copy receipt card" button), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
 
 ### Auto-focus (optional, macOS)
 
 Set `auto_focus: true` and Kairos opens a block on its own when you are active in another app (your editor, a browser), and ends it when a Hermes app or a terminal is in front again. Your next message then carries the catch-up. It reads two local facts, idle time (`ioreg`) and the front app's bundle id (`lsappinfo`), keeps neither, and is off by default.
+
+## Why a peacock
+
+Argus was the watchman with a hundred eyes, and nothing got past him. Hermes played him to sleep, one eye after another, and his eyes ended up in the peacock's tail. Kairos does the same to your agent's interruptions: while you are in flow every eye is shut, and one eye opens for each question waiting for you.
 
 ## Install
 

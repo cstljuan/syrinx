@@ -103,6 +103,105 @@ function Section({ title, children }) {
   })
 }
 
+// Argus, the hundred-eyed watchman Hermes lulled to sleep. His tail tells the state at a glance:
+// every eye shut while you are in flow, one eye open for each question he is holding for you.
+const EYE_ORDER = [4, 3, 5, 2, 6, 1, 7, 0, 8]
+
+function argusState(data) {
+  const parked = (data.parked || []).length
+  const night = Boolean(data.night && data.night.is_night)
+  const flow = Boolean(data.focus && data.focus.active)
+  const holding = Math.min(parked, 9)
+  const plural = parked === 1 ? 'question' : 'questions'
+  if (night) return { open: 0, asleep: true, moon: true, line: 'Argus sleeps until morning.' }
+  if (flow) {
+    return {
+      open: holding, asleep: true, moon: false,
+      line: parked ? `Argus is keeping ${parked} ${plural} for you.` : 'Every eye is shut. Nothing gets through.'
+    }
+  }
+  if (parked) return { open: holding, asleep: false, moon: false, line: `${parked} ${plural} waiting. Say /catchup.` }
+  return { open: 9, asleep: false, moon: false, line: 'Argus is watching. Start a flow and he will hold the questions.' }
+}
+
+function Argus({ data }) {
+  const st = argusState(data)
+  const openSet = new Set(EYE_ORDER.slice(0, st.open))
+  const O = [100, 116]
+  const ink = { stroke: 'currentColor', strokeLinecap: 'round', fill: 'none' }
+  const feathers = []
+  for (let i = 0; i < 9; i++) {
+    const deg = -84 + i * 21
+    const r = (deg * Math.PI) / 180
+    const sin = Math.sin(r)
+    const cos = Math.cos(r)
+    const x = O[0] + 60 * sin
+    const y = O[1] - 60 * cos
+    const open = openSet.has(i)
+    feathers.push(
+      jsx('line', {
+        x1: O[0] + 26 * sin, y1: O[1] - 26 * cos, x2: x, y2: y,
+        stroke: 'currentColor', strokeOpacity: 0.3, strokeWidth: 2
+      }, `s${i}`),
+      jsxs('g', {
+        transform: `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${deg})`,
+        children: [
+          jsx('ellipse', { rx: 14, ry: 19, fill: 'currentColor', fillOpacity: open ? 0.3 : 0.18 }, 'f'),
+          open
+            ? jsxs('g', {
+                transform: 'translate(0 -2)',
+                children: [
+                  jsx('ellipse', { rx: 7.5, ry: 5.5, strokeWidth: 1.6, ...ink }, 'r'),
+                  jsx('circle', { r: 2.6, fill: 'currentColor' }, 'p')
+                ]
+              }, 'o')
+            : jsxs('g', {
+                transform: 'translate(0 -2)',
+                children: [
+                  jsx('path', { d: 'M -7 -1 Q 0 5.5 7 -1', strokeWidth: 1.6, ...ink }, 'l'),
+                  jsx('path', { d: 'M -4.5 2.6 L -5.6 5.6 M 0 3.4 L 0 6.8 M 4.5 2.6 L 5.6 5.6', strokeWidth: 1.3, ...ink }, 'h')
+                ]
+              }, 'c')
+        ]
+      }, `e${i}`)
+    )
+  }
+  const faceEye = (cx) => st.asleep
+    ? jsx('path', { d: `M ${cx - 5} 108 Q ${cx} 113 ${cx + 5} 108`, strokeWidth: 1.8, ...ink }, `fe${cx}`)
+    : jsx('circle', { cx, cy: 108, r: 4.2, fill: 'currentColor' }, `fe${cx}`)
+  const body = [
+    jsx('ellipse', { cx: 100, cy: 118, rx: 27, ry: 28, fill: 'currentColor', fillOpacity: 0.34 }, 'body'),
+    jsx('ellipse', { cx: 75, cy: 124, rx: 6, ry: 11, fill: 'currentColor', fillOpacity: 0.34, transform: 'rotate(14 75 124)' }, 'wl'),
+    jsx('ellipse', { cx: 125, cy: 124, rx: 6, ry: 11, fill: 'currentColor', fillOpacity: 0.34, transform: 'rotate(-14 125 124)' }, 'wr'),
+    jsx('path', { d: 'M 100 90 L 100 80 M 100 90 L 93 81 M 100 90 L 107 81', strokeWidth: 1.5, ...ink }, 'crest'),
+    jsx('circle', { cx: 100, cy: 79, r: 2, fill: 'currentColor' }, 'c1'),
+    jsx('circle', { cx: 92.5, cy: 80, r: 2, fill: 'currentColor' }, 'c2'),
+    jsx('circle', { cx: 107.5, cy: 80, r: 2, fill: 'currentColor' }, 'c3'),
+    faceEye(89),
+    faceEye(111),
+    jsx('path', { d: 'M 96 114 L 104 114 L 100 120 Z', fill: 'currentColor' }, 'beak'),
+    jsx('path', { d: 'M 92 146 L 92 151 M 88 151 L 96 151 M 108 146 L 108 151 M 104 151 L 112 151', strokeWidth: 1.6, ...ink }, 'feet')
+  ]
+  if (st.moon) {
+    body.push(jsx('path', {
+      d: 'M 166 30 a 11 11 0 1 0 10 16 a 8.5 8.5 0 0 1 -10 -16 Z', fill: 'currentColor', fillOpacity: 0.7
+    }, 'moon'))
+  }
+  return jsxs('div', {
+    className: 'flex flex-col items-center gap-1',
+    children: [
+      jsx('svg', {
+        viewBox: '0 0 200 156',
+        className: 'w-40 text-(--theme-primary)',
+        role: 'img',
+        'aria-label': st.line,
+        children: [...feathers, ...body]
+      }),
+      jsx('div', { className: 'text-center text-xs text-(--ui-text-tertiary)', children: st.line })
+    ]
+  })
+}
+
 function Now({ ctx, data }) {
   const focus = data.focus
   const start = useMutation({
@@ -305,6 +404,7 @@ function Pane({ ctx }) {
     children: jsxs('div', {
       className: 'flex flex-col gap-4 p-3',
       children: [
+        jsx(Argus, { data }),
         jsx(Now, { ctx, data }),
         jsx(Separator, {}),
         jsx(Parked, { ctx, data }),
