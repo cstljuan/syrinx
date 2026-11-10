@@ -4,7 +4,7 @@ Needs Pillow and numpy, which the plugin itself never imports:
 
     uv run --with pillow --with numpy python tools/make_assets.py plate    <art.png>
     uv run --with pillow --with numpy python tools/make_assets.py numerals <sheet.png> "0123456789hm"
-    uv run --with pillow --with numpy python tools/make_assets.py poses    <sheet.png> <rows> <cols> <name,name,...>
+    uv run --with pillow --with numpy --with scipy python tools/make_assets.py poses <sheet.png> <name,name,...>
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
 
@@ -64,9 +64,9 @@ def numerals(path: str, order: str) -> None:
     sheet = Image.open(path).convert("RGB")
     blue = _blueness(sheet)
     ink = blue > 28
-    rows = np.where(ink.sum(axis=1) > 2)[0]
+    rows = np.where(ink.sum(axis=1) > sheet.width * 0.02)[0]      # the glyph band, not a stray stain
     top, bottom = int(rows.min()), int(rows.max()) + 1
-    columns = _runs(ink[top:bottom].sum(axis=0) > 1, min_gap=max(6, sheet.width // 160))
+    columns = _runs(ink[top:bottom].sum(axis=0) > (bottom - top) * 0.02, min_gap=max(6, sheet.width // 160))
     columns = [(a, b) for a, b in columns if b - a > sheet.width // 200]
     if len(columns) != len(order):
         raise SystemExit(f"found {len(columns)} glyphs, expected {len(order)}: {columns}")
@@ -86,42 +86,60 @@ def numerals(path: str, order: str) -> None:
         print(target.name, glyph.size, target.stat().st_size)
 
 
-def cut_sprite(image: Image.Image) -> Image.Image:
-    """One pose off white paper: flood the outside, keep the body with its pale belly and eyes."""
-    ink = _blueness(image) > 26
-    mask = Image.fromarray((ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5))
-    canvas = Image.new("L", (mask.width + 2, mask.height + 2), 0)
-    canvas.paste(mask, (1, 1))
-    ImageDraw.floodfill(canvas, (0, 0), 128)
-    inside = np.asarray(canvas.crop((1, 1, mask.width + 1, mask.height + 1))) != 128
-    solid = Image.fromarray((inside * 255).astype(np.uint8))
-    core = solid.filter(ImageFilter.MinFilter(15)).getbbox()
-    if core is None:
-        raise SystemExit("no sprite found in a cell")
-    left, top, right, bottom = core[0] - 12, core[1] - 12, core[2] + 12, core[3] + 12
-    alpha = solid.filter(ImageFilter.MinFilter(5)).filter(ImageFilter.GaussianBlur(1.0))
-    keep = Image.new("L", alpha.size, 0)
-    keep.paste(alpha.crop((left, top, right, bottom)), (left, top))
-    sprite = image.convert("RGBA")
-    sprite.putalpha(keep)
-    return sprite.crop(keep.point(lambda v: 255 if v > 40 else 0).getbbox())
+def poses(path: str, names: str) -> None:
+    """Find every pose on a sheet, reading order: full PNG to ``art/poses``, small WebP to ``assets/argus``.
 
+    Poses are found as connected blobs of pigment, so nothing is clipped at a grid line and pale
+    paper stains are left behind. Holes (the pale belly, the eye whites, a scroll) are filled.
+    """
+    from scipy import ndimage
 
-def poses(path: str, rows: str, cols: str, names: str) -> None:
-    """Cut a grid of poses into ``assets/argus/<name>.png``."""
     sheet = Image.open(path).convert("RGB")
-    n_rows, n_cols = int(rows), int(cols)
-    labels = names.split(",")
-    out_dir = ASSETS / "argus"
+    labels_wanted = names.split(",")
+    ink = _blueness(sheet) > 30
+    joined = ndimage.binary_dilation(ink, iterations=4)
+    labelled, count = ndimage.label(joined)
+    sizes = ndimage.sum(joined, labelled, range(1, count + 1))
+    floor = 0.012 * sheet.width * sheet.height
+    blobs = []
+    for index, size in enumerate(sizes, start=1):
+        if size < floor:
+            continue
+        rows, cols = np.where(labelled == index)
+        blobs.append((index, rows.min(), rows.max() + 1, cols.min(), cols.max() + 1))
+    if len(blobs) != len(labels_wanted):
+        raise SystemExit(f"found {len(blobs)} poses, expected {len(labels_wanted)}")
+    # Reading order: split into rows by vertical centre, then left to right.
+    blobs.sort(key=lambda b: (b[1] + b[2]) / 2)
+    ordered, row = [], [blobs[0]]
+    for blob in blobs[1:]:
+        if (blob[1] + blob[2]) / 2 - (row[-1][1] + row[-1][2]) / 2 > sheet.height * 0.2:
+            ordered += sorted(row, key=lambda b: b[3]); row = [blob]
+        else:
+            row.append(blob)
+    ordered += sorted(row, key=lambda b: b[3])
+
+    out_dir = ASSETS.parent / "art" / "poses"       # full cutouts, kept for building the pet
+    small_dir = ASSETS / "argus"                    # small WebP copies, shipped for the pane
     out_dir.mkdir(parents=True, exist_ok=True)
-    cell_w, cell_h = sheet.width / n_cols, sheet.height / n_rows
-    for index, name in enumerate(labels):
-        r, c = divmod(index, n_cols)
-        cell = sheet.crop((round(c * cell_w), round(r * cell_h), round((c + 1) * cell_w), round((r + 1) * cell_h)))
-        sprite = cut_sprite(cell)
+    small_dir.mkdir(parents=True, exist_ok=True)
+    rgba = np.dstack([np.asarray(sheet), np.zeros((sheet.height, sheet.width), np.uint8)])
+    for name, (index, top, bottom, left, right) in zip(labels_wanted, ordered):
+        solid = ndimage.binary_fill_holes(labelled == index)
+        solid = ndimage.binary_erosion(solid, iterations=5)          # bite back the dilation and the paper halo
+        alpha = Image.fromarray((solid * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.1))
+        cut = rgba.copy()
+        cut[..., 3] = np.asarray(alpha)
+        sprite = Image.fromarray(cut, "RGBA").crop((left, top, right, bottom))
+        sprite = sprite.crop(sprite.getchannel("A").point(lambda v: 255 if v > 30 else 0).getbbox())
+        if max(sprite.size) > 384:
+            sprite.thumbnail((384, 384), Image.Resampling.LANCZOS)
         target = out_dir / f"{name}.png"
         sprite.save(target, optimize=True)
-        print(target.name, sprite.size, target.stat().st_size)
+        small = sprite.copy()
+        small.thumbnail((240, 240), Image.Resampling.LANCZOS)
+        small.save(small_dir / f"{name}.webp", "WEBP", quality=82, method=6)
+        print(target.name, sprite.size, target.stat().st_size, (small_dir / f"{name}.webp").stat().st_size)
 
 
 if __name__ == "__main__":

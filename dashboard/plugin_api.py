@@ -30,6 +30,7 @@ def _load(name: str):
 
 _core = _load("core")
 _card = _load("card")
+_argus = _load("argus")
 
 
 def _settings() -> dict[str, Any]:
@@ -60,9 +61,21 @@ def _broadcast(kind: str, line: str) -> None:
         logger.debug("kairos api: broadcast skipped", exc_info=True)
 
 
+def _snapshot(k) -> dict[str, Any]:
+    snap = k.snapshot()
+    snap["argus"] = _argus.pose_for(snap)
+    return snap
+
+
 @router.get("/state")
 def state() -> dict[str, Any]:
-    return _kairos().snapshot()
+    return _snapshot(_kairos())
+
+
+@router.get("/argus/{name}")
+def argus_pose(name: str) -> dict[str, Any]:
+    """One pose of the mascot as a data URI. Unknown names get an empty answer, never a file read."""
+    return {"name": name, "src": _argus.pose_data_uri(name)}
 
 
 @router.post("/flow")
@@ -75,7 +88,7 @@ def flow(body: dict) -> dict[str, Any]:
         minutes = None
     k.start_focus(minutes, source="pane")
     _broadcast("flow_on", k.status_line())
-    return k.snapshot()
+    return _snapshot(k)
 
 
 @router.post("/flow/end")
@@ -83,7 +96,7 @@ def flow_end() -> dict[str, Any]:
     k = _kairos()
     k.end_focus("pane")
     _broadcast("flow_off", k.status_line())
-    return k.snapshot()
+    return _snapshot(k)
 
 
 @router.post("/late")
@@ -96,7 +109,7 @@ def late(body: dict) -> dict[str, Any]:
         minutes = None
     k.late(minutes)
     _broadcast("late", k.status_line())
-    return k.snapshot()
+    return _snapshot(k)
 
 
 @router.post("/answer")
@@ -106,7 +119,7 @@ def answer(body: dict) -> dict[str, Any]:
     text = str((body or {}).get("answer") or "")
     item = k.answer(item_id, text)
     _broadcast("answered", k.status_line())
-    return {"ok": item is not None, "snapshot": k.snapshot()}
+    return {"ok": item is not None, "snapshot": _snapshot(k)}
 
 
 @router.post("/night")
@@ -115,9 +128,9 @@ def night(body: dict) -> dict[str, Any]:
     try:
         k.set_night_times((body or {}).get("cutoff"), (body or {}).get("wake"))
     except ValueError as exc:
-        return {"ok": False, "error": str(exc), "snapshot": k.snapshot()}
+        return {"ok": False, "error": str(exc), "snapshot": _snapshot(k)}
     _broadcast("night", k.status_line())
-    return {"ok": True, "snapshot": k.snapshot()}
+    return {"ok": True, "snapshot": _snapshot(k)}
 
 
 @router.get("/catchup")

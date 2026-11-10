@@ -13,7 +13,7 @@ Kairos is a Hermes Agent plugin. It does four things, all of them with hooks tha
 
 In the Hermes Desktop app and the TUI, a one-line status (`Kairos · focus until 3:45 PM · 12 min in · 2 parked`) is kept up to date in place.
 
-In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (Argus at the top, whose tail eyes close while you are in flow and open one by one for each question he is holding; then now, the parked questions with a "keep default" button and an answer field, the night queue, seven daily bars, the receipt with a "copy receipt card" button), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
+In the Desktop app, Kairos also adds a **status-bar chip** (click it to start or end a block), a **Kairos pane** (Argus at the top, changing pose with the moment: shushing while you are in flow, on guard when he is holding questions, offering a sealed letter when they are waiting for you, asleep at night; then now, the parked questions with a "keep default" button and an answer field, the night queue, seven daily bars, the receipt with a "copy receipt card" button), and, if you have adopted a Hermes pet, the pet's speech bubble carries the Kairos line ("2 parked", "night until 08:00"). Answers typed in the pane reach the agent on its next turn.
 
 ### Auto-focus (optional, macOS)
 
@@ -79,6 +79,7 @@ State is profile-scoped plugin state (`ctx.state`), under the Hermes plugin data
 - **Approvals are untouched.** Kairos never auto-approves, never answers a prompt, and never changes approval routing. It only blocks the agent's own `clarify` questions during a focus block and tells the agent to continue with the default it had in mind.
 - **Stored data:** focus blocks and their lengths, parked questions and the defaults taken, queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `/kairos card` writes one file, `kairos-receipt.svg`, into the same plugin data folder; it contains counters only. `kairos_status` exposes only flags and counts to the model.
 - **Unattended runs:** cron-driven turns are never blocked or queued. Night and Flow only act on turns a person started.
+- **Bundled art:** the card background, the painted numerals and the Argus poses are image files inside the plugin folder (`assets/`, about half a megabyte). They are read from disk and embedded as data; nothing is fetched.
 - **No telemetry.**
 
 ## Development
@@ -90,3 +91,8 @@ hermes plugins validate . --install-deps
 ```
 
 Built by [cstljuan](https://github.com/cstljuan) for the Hermes Agent Plugin Hackathon. MIT license.
+
+### Art
+
+The shipped images in `assets/` are built from the original cyanotype prints with `tools/make_assets.py` (Pillow, numpy and scipy, used only by that script; the plugin itself imports nothing outside the standard library). The full-size originals and the large pose cutouts live on the `art` branch so the plugin stays small.
+

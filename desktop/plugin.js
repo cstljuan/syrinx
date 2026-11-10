@@ -124,7 +124,35 @@ function argusState(data) {
   return { open: 9, asleep: false, moon: false, line: 'Argus is watching. Start a flow and he will hold the questions.' }
 }
 
-function Argus({ data }) {
+// The painted Argus when the backend has the art, the drawn one otherwise.
+function Argus({ ctx, data }) {
+  const chosen = data.argus || null
+  const pose = chosen && chosen.pose
+  const [broken, setBroken] = useState(false)
+  const art = useQuery({
+    queryKey: ['kairos', 'argus', pose || 'none'],
+    queryFn: () => ctx.rest(`/argus/${pose}`),
+    enabled: Boolean(pose),
+    staleTime: Infinity
+  })
+  const src = art.data && art.data.src
+  if (pose && src && !broken) {
+    return jsxs('div', {
+      className: 'flex flex-col items-center gap-1',
+      children: [
+        jsx('img', {
+          src, alt: chosen.line, draggable: false,
+          className: 'h-36 w-auto select-none',
+          onError: () => setBroken(true)
+        }),
+        jsx('div', { className: 'text-center text-xs text-(--ui-text-tertiary)', children: chosen.line })
+      ]
+    })
+  }
+  return jsx(DrawnArgus, { data })
+}
+
+function DrawnArgus({ data }) {
   const st = argusState(data)
   const openSet = new Set(EYE_ORDER.slice(0, st.open))
   const O = [100, 116]
@@ -404,7 +432,7 @@ function Pane({ ctx }) {
     children: jsxs('div', {
       className: 'flex flex-col gap-4 p-3',
       children: [
-        jsx(Argus, { data }),
+        jsx(Argus, { ctx, data }),
         jsx(Now, { ctx, data }),
         jsx(Separator, {}),
         jsx(Parked, { ctx, data }),
