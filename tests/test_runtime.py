@@ -233,6 +233,27 @@ def test_kairos_card_saves_one_file_in_the_plugin_folder(rt, tmp_path):
     assert "could not save" in ctx.commands["kairos"]("card") and "Kairos receipt" in ctx.commands["kairos"]("card")
 
 
+def test_kairos_pet_goes_through_the_hermes_pet_store(rt, monkeypatch):
+    r, ctx, _ = rt
+    # No pet feature on this host: a plain sentence, never an exception.
+    monkeypatch.setitem(sys.modules, "agent.pet.store", None)
+    assert "could not add Argus" in ctx.commands["kairos"]("pet")
+    # With the store: one call, raw sheet bytes, the argus slug; nothing is selected for the user.
+    calls = []
+    store = types.ModuleType("agent.pet.store")
+    store.register_local_pet = lambda sheet, **kw: calls.append((sheet, kw))
+    for name in ("agent", "agent.pet"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "agent.pet.store", store)
+    reply = ctx.commands["kairos"]("pet")
+    sheet = os.path.join(ROOT, "assets", "pet", "argus", "spritesheet.webp")
+    if os.path.exists(sheet):
+        assert "/pet argus" in reply and len(calls) == 1
+        assert calls[0][0][:4] == b"RIFF" and calls[0][1]["slug"] == "argus"
+    else:
+        assert "no pet art" in reply
+
+
 def test_commands_text(rt):
     r, ctx, _ = rt
     assert "Kairos commands" in ctx.commands["kairos"]("help")

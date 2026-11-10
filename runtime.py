@@ -11,6 +11,7 @@ import logging
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from . import card, core, presence, schemas
@@ -18,6 +19,8 @@ from . import card, core, presence, schemas
 logger = logging.getLogger(__name__)
 
 PRESENCE_CACHE_SECONDS = 10
+
+_PLUGIN_DIR = Path(__file__).resolve().parent
 
 HELP = (
     "Kairos commands\n"
@@ -27,6 +30,7 @@ HELP = (
     "/night HH:MM [HH:MM]   set the cutoff and, optionally, the morning time\n"
     "/kairos [receipt|week] status, the time receipt, or the last 7 days\n"
     "/kairos card           save the receipt as a shareable image (numbers only)\n"
+    "/kairos pet            add Argus, the Kairos mascot, to your Hermes pets\n"
     "/kairos auto on|off    auto-focus from presence (macOS)\n"
     "/kairos night on|off   queue late-night requests, or not"
 )
@@ -343,6 +347,23 @@ class Runtime:
         wake = core.datetime.combine(self.k.now().date(), self.k.wake())
         return f"Night set: cutoff {core.fmt_clock(cutoff)}, morning brief {core.fmt_clock(wake)}."
 
+    def _add_pet(self) -> str:
+        """Put Argus among this profile's pets through Hermes' own pet store. Adopting him stays your call."""
+        sheet = _PLUGIN_DIR / "assets" / "pet" / "argus" / "spritesheet.webp"
+        try:
+            data = sheet.read_bytes()
+        except OSError:
+            return "This copy of Kairos has no pet art. Reinstall the plugin and try again."
+        try:
+            from agent.pet.store import register_local_pet  # type: ignore
+
+            register_local_pet(data, slug="argus", display_name="Argus",
+                               description="The hundred-eyed watchman Hermes played to sleep. He keeps your questions until the right moment.")
+        except Exception:
+            logger.debug("kairos: could not add the pet", exc_info=True)
+            return "Kairos could not add Argus on this Hermes version. Pets need Hermes with the pet feature."
+        return "Argus is now among your pets. Adopt him with /pet argus (and /pet off sends him away)."
+
     def _save_card(self) -> str:
         """Write the receipt card into the plugin's own data folder and say where it is."""
         svg = card.receipt_svg(self.k.card_data())
@@ -366,6 +387,8 @@ class Runtime:
             return HELP
         if arg == "card":
             return self._save_card()
+        if arg == "pet":
+            return self._add_pet()
         parts = arg.split()
         if len(parts) == 2 and parts[0] in ("auto", "night") and parts[1] in ("on", "off"):
             key = "auto_focus" if parts[0] == "auto" else "night_enabled"
@@ -409,5 +432,5 @@ def register(ctx: Any) -> None:
     ctx.register_command("night", rt.cmd_night, description="Set the Kairos cutoff and morning time",
                          args_hint="HH:MM [HH:MM]")
     ctx.register_command("kairos", rt.cmd_kairos, description="Kairos status, receipt and help",
-                         args_hint="[receipt|week|card|help]")
+                         args_hint="[receipt|week|card|pet|help]")
     return rt

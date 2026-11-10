@@ -23,6 +23,8 @@ Set `auto_focus: true` and Kairos opens a block on its own when you are active i
 
 Argus was the watchman with a hundred eyes, and nothing got past him. Hermes played him to sleep, one eye after another, and his eyes ended up in the peacock's tail. Kairos does the same to your agent's interruptions: while you are in flow every eye is shut, and one eye opens for each question waiting for you.
 
+Argus is also a full Hermes pet: `/kairos pet` adds him, `/pet argus` adopts him. He walks, waves, reads while the model thinks, writes while a tool runs, and holds out a sealed letter when the agent is waiting on you. Every frame comes from painted key poses moved in code, so the print never flickers.
+
 ## Install
 
 ```bash
@@ -41,6 +43,7 @@ Then, in any session:
 /kairos           status; /kairos receipt for the time receipt
 /kairos week      the last seven days
 /kairos card      save the receipt as a shareable image
+/kairos pet       add Argus to your Hermes pets (then /pet argus)
 ```
 
 Settings live under `plugins.entries.kairos.settings` (also editable in Desktop under Settings, Plugins):
@@ -79,7 +82,8 @@ State is profile-scoped plugin state (`ctx.state`), under the Hermes plugin data
 - **Approvals are untouched.** Kairos never auto-approves, never answers a prompt, and never changes approval routing. It only blocks the agent's own `clarify` questions during a focus block and tells the agent to continue with the default it had in mind.
 - **Stored data:** focus blocks and their lengths, parked questions and the defaults taken, queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `/kairos card` writes one file, `kairos-receipt.svg`, into the same plugin data folder; it contains counters only. `kairos_status` exposes only flags and counts to the model.
 - **Unattended runs:** cron-driven turns are never blocked or queued. Night and Flow only act on turns a person started.
-- **Bundled art:** the card background, the painted numerals and the Argus poses are image files inside the plugin folder (`assets/`, about half a megabyte). They are read from disk and embedded as data; nothing is fetched.
+- **The pet:** `/kairos pet` hands the bundled Argus sprite sheet to Hermes' own pet store (`register_local_pet`), which writes it under your profile's `pets/argus/`. Kairos does not select the pet or change any display setting; you adopt him with `/pet argus`.
+- **Bundled art:** the card background, the painted numerals and the Argus poses are image files inside the plugin folder (`assets/`, about a megabyte and a half). They are read from disk and embedded as data; nothing is fetched.
 - **No telemetry.**
 
 ## Development
