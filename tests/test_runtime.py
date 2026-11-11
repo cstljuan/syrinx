@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PARENT = os.path.dirname(ROOT)
 sys.path.insert(0, PARENT)
 
-kairos_pkg = importlib.import_module(os.path.basename(ROOT))
+syrinx_pkg = importlib.import_module(os.path.basename(ROOT))
 runtime = importlib.import_module(f"{os.path.basename(ROOT)}.runtime")
 core = importlib.import_module(f"{os.path.basename(ROOT)}.core")
 
@@ -77,7 +77,7 @@ class FakeCtx:
 @pytest.fixture
 def rt():
     ctx = FakeCtx()
-    rt = kairos_pkg.register(ctx)
+    rt = syrinx_pkg.register(ctx)
     clock = {"t": datetime.fromisoformat("2026-11-10 15:00")}
     rt.k._now = lambda: clock["t"]
     return rt, ctx, clock
@@ -85,17 +85,17 @@ def rt():
 
 def test_registration_matches_manifest(rt):
     _, ctx, _ = rt
-    assert set(ctx.tools) == {"kairos_park", "kairos_interrupt", "kairos_status"}
+    assert set(ctx.tools) == {"syrinx_park", "syrinx_interrupt", "syrinx_status"}
     assert set(ctx.hooks) == {"pre_tool_call", "post_tool_call", "pre_llm_call", "post_llm_call",
                               "on_human_input_request", "on_human_input_resolved"}
-    assert set(ctx.commands) == {"flow", "catchup", "late", "night", "kairos"}
+    assert set(ctx.commands) == {"flow", "catchup", "late", "night", "syrinx"}
 
 
 def test_focus_flow_end_to_end(rt):
     r, ctx, clock = rt
     reply = ctx.commands["flow"]("30", session_id="s1")
     assert "Focus until 3:30 PM" in reply
-    assert ctx.posted and ctx.posted[0].texts[0].startswith("Kairos · focus")
+    assert ctx.posted and ctx.posted[0].texts[0].startswith("Syrinx · focus")
 
     # The agent tries to ask: parked, not shown.
     directive = ctx.hooks["pre_tool_call"](tool_name="clarify", args={"questions": [{"question": "Ship it?"}]},
@@ -122,19 +122,19 @@ def test_tools_return_json(rt):
     r, ctx, _ = rt
     ctx.commands["flow"]("45", session_id="s1")
     # Hermes calls a tool as handler(args_dict, **context).
-    parked = json.loads(ctx.tools["kairos_park"]({"question": "Which color?", "default": "blue", "why": "brand"},
+    parked = json.loads(ctx.tools["syrinx_park"]({"question": "Which color?", "default": "blue", "why": "brand"},
                                                  task_id="s1"))
     assert parked["parked"].startswith("q-") and parked["proceed_with"] == "blue"
     assert r.k.parked_open()[0]["question"] == "Which color?"
-    status = json.loads(ctx.tools["kairos_status"]({}, task_id="s1"))
+    status = json.loads(ctx.tools["syrinx_status"]({}, task_id="s1"))
     assert status["focus_active"] and status["parked"] == 1
-    ok = json.loads(ctx.tools["kairos_interrupt"]({"question": "Pay?", "why": "money"}, task_id="s1"))
+    ok = json.loads(ctx.tools["syrinx_interrupt"]({"question": "Pay?", "why": "money"}, task_id="s1"))
     assert ok["ok"]
     # Plain keywords still work.
-    assert json.loads(ctx.tools["kairos_park"](question="Old style?", default="yes"))["proceed_with"] == "yes"
+    assert json.loads(ctx.tools["syrinx_park"](question="Old style?", default="yes"))["proceed_with"] == "yes"
     assert ctx.hooks["pre_tool_call"](tool_name="clarify", args={"questions": [{"question": "Pay?"}]},
                                       task_id="s1", session_id="s1") is None
-    assert "question is required" in ctx.tools["kairos_park"]({"question": "", "default": "x"})
+    assert "question is required" in ctx.tools["syrinx_park"]({"question": "", "default": "x"})
 
 
 def test_night_blocks_and_morning_delivers(rt):
@@ -162,7 +162,7 @@ def test_pane_answers_reach_the_agent_next_turn(rt):
     item = r.k.park("Which port?", "8080", session_id="s1")
     r.k.answer(item["id"], "9090")
     turn = ctx.hooks["pre_llm_call"](session_id="s1", user_message="hey", platform="cli")
-    assert "Kairos pane" in turn["context"] and "9090" in turn["context"]
+    assert "Syrinx pane" in turn["context"] and "9090" in turn["context"]
     assert ctx.hooks["pre_llm_call"](session_id="s1", user_message="hey", platform="cli") is None
 
 
@@ -225,37 +225,37 @@ def test_hooks_never_raise(rt):
     assert ctx.hooks["on_human_input_request"](kind="approval", request_id="r") is None
 
 
-def test_kairos_toggles_and_week(rt, monkeypatch):
+def test_syrinx_toggles_and_week(rt, monkeypatch):
     r, ctx, _ = rt
     ctx.set_config = lambda key, value: ctx.config.__setitem__(key, value)
-    assert "Night off" in ctx.commands["kairos"]("night off")
+    assert "Night off" in ctx.commands["syrinx"]("night off")
     assert r.k.config["night_enabled"] is False and ctx.config["night_enabled"] is False
     import importlib
     presence = importlib.import_module(f"{os.path.basename(ROOT)}.presence")
     monkeypatch.setattr(presence.platform, "system", lambda: "Linux")
-    assert "needs macOS" in ctx.commands["kairos"]("auto on")
+    assert "needs macOS" in ctx.commands["syrinx"]("auto on")
     monkeypatch.setattr(presence.platform, "system", lambda: "Darwin")
-    assert "Auto-focus on" in ctx.commands["kairos"]("auto on")
-    assert "last 7 days" in ctx.commands["kairos"]("week")
+    assert "Auto-focus on" in ctx.commands["syrinx"]("auto on")
+    assert "last 7 days" in ctx.commands["syrinx"]("week")
 
 
-def test_kairos_card_saves_one_file_in_the_plugin_folder(rt, tmp_path):
+def test_syrinx_card_saves_one_file_in_the_plugin_folder(rt, tmp_path):
     r, ctx, _ = rt
-    ctx.state.data_dir = tmp_path / "plugin-data" / "kairos"
-    reply = ctx.commands["kairos"]("card")
-    saved = ctx.state.data_dir / "kairos-receipt.svg"
+    ctx.state.data_dir = tmp_path / "plugin-data" / "syrinx"
+    reply = ctx.commands["syrinx"]("card")
+    saved = ctx.state.data_dir / "syrinx-receipt.svg"
     assert saved.exists() and str(saved) in reply and "numbers only" in reply
     assert saved.read_text(encoding="utf-8").startswith("<svg")
     # No data folder (an older host): the command still answers with the text receipt.
     del ctx.state.data_dir
-    assert "could not save" in ctx.commands["kairos"]("card") and "Kairos receipt" in ctx.commands["kairos"]("card")
+    assert "could not save" in ctx.commands["syrinx"]("card") and "Syrinx receipt" in ctx.commands["syrinx"]("card")
 
 
-def test_kairos_pet_goes_through_the_hermes_pet_store(rt, monkeypatch):
+def test_syrinx_pet_goes_through_the_hermes_pet_store(rt, monkeypatch):
     r, ctx, _ = rt
     # No pet feature on this host: a plain sentence, never an exception.
     monkeypatch.setitem(sys.modules, "agent.pet.store", None)
-    assert "could not add Argus" in ctx.commands["kairos"]("pet")
+    assert "could not add Argus" in ctx.commands["syrinx"]("pet")
     # With the store: one call, raw sheet bytes, the argus slug; nothing is selected for the user.
     calls = []
     store = types.ModuleType("agent.pet.store")
@@ -263,7 +263,7 @@ def test_kairos_pet_goes_through_the_hermes_pet_store(rt, monkeypatch):
     for name in ("agent", "agent.pet"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
     monkeypatch.setitem(sys.modules, "agent.pet.store", store)
-    reply = ctx.commands["kairos"]("pet")
+    reply = ctx.commands["syrinx"]("pet")
     sheet = os.path.join(ROOT, "assets", "pet", "argus", "spritesheet.webp")
     if os.path.exists(sheet):
         assert "/pet argus" in reply and len(calls) == 1
@@ -274,9 +274,9 @@ def test_kairos_pet_goes_through_the_hermes_pet_store(rt, monkeypatch):
 
 def test_commands_text(rt):
     r, ctx, _ = rt
-    assert "Kairos commands" in ctx.commands["kairos"]("help")
+    assert "Syrinx commands" in ctx.commands["syrinx"]("help")
     assert "Night set: cutoff 11:00 PM" in ctx.commands["night"]("23:00 07:00")
     assert "Use /night" in ctx.commands["night"]("99:99")
     assert "No focus block" in ctx.commands["flow"]("off", session_id="s1")
-    assert "Kairos receipt" in ctx.commands["kairos"]("receipt")
+    assert "Syrinx receipt" in ctx.commands["syrinx"]("receipt")
     assert "No questions were parked" in ctx.commands["catchup"]("", session_id="s1")

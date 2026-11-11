@@ -1,4 +1,4 @@
-"""Kairos: your agent is fast. Kairos makes sure it waits for the right moment.
+"""Syrinx: your agent is fast. Syrinx makes it wait for the right moment.
 
 Hermes Agent plugin. Parks non-urgent questions while you are heads-down, hands them back in one
 pass with a catch-up when you return, queues late-night requests into a morning brief, and keeps a

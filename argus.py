@@ -35,19 +35,19 @@ def pose_data_uri(name: str) -> Optional[str]:
 
 
 def pose_for(snapshot: dict[str, Any]) -> dict[str, str]:
-    """Pick the pose and the line under it from a ``Kairos.snapshot()``."""
+    """Pick the pose and the line under it from a ``Syrinx.snapshot()``."""
     parked = len(snapshot.get("parked") or [])
     night = snapshot.get("night") or {}
     focus = snapshot.get("focus") or {}
     questions = "question" if parked == 1 else "questions"
     if night.get("is_night"):
         return {"pose": "sleep", "line": "Argus sleeps until morning."}
-    if night.get("late_active"):
-        return {"pose": "yawn", "line": "Up late. Argus is keeping you company."}
     if focus.get("active"):
         if parked:
             return {"pose": "guard", "line": f"Argus is keeping {parked} {questions} for you."}
         return {"pose": "shush", "line": "Every eye is shut. Nothing gets through."}
+    if night.get("late_active") and not parked:
+        return {"pose": "yawn", "line": "Up late. Argus is keeping you company."}
     if parked:
         return {"pose": "letter", "line": f"{parked} {questions} waiting. Say /catchup."}
     return {"pose": "idle", "line": "Argus is watching. Start a flow and he will hold the questions."}

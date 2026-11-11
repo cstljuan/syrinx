@@ -1,4 +1,4 @@
-"""Kairos runtime: wires the rules in ``core.py`` to the Hermes plugin context.
+"""Syrinx runtime: wires the rules in ``core.py`` to the Hermes plugin context.
 
 Every hook callback is wrapped so it can never break a turn, accepts ``**kwargs`` for forward
 compatibility, and stays fast (``pre_tool_call`` fails closed in Hermes if a callback hangs).
@@ -23,16 +23,16 @@ PRESENCE_CACHE_SECONDS = 10
 _PLUGIN_DIR = Path(__file__).resolve().parent
 
 HELP = (
-    "Kairos commands\n"
+    "Syrinx commands\n"
     "/flow [minutes|off]    start or end a focus block (default from settings)\n"
     "/catchup               what happened, and hand back the parked questions\n"
     "/late [minutes]        keep working past the cutoff for a while\n"
     "/night HH:MM [HH:MM]   set the cutoff and, optionally, the morning time\n"
-    "/kairos [receipt|week] status, the time receipt, or the last 7 days\n"
-    "/kairos card           save the receipt as a shareable image (numbers only)\n"
-    "/kairos pet            add Argus, the Kairos mascot, to your Hermes pets\n"
-    "/kairos auto on|off    auto-focus from presence (macOS)\n"
-    "/kairos night on|off   queue late-night requests, or not"
+    "/syrinx [receipt|week] status, the time receipt, or the last 7 days\n"
+    "/syrinx card           save the receipt as a shareable image (numbers only)\n"
+    "/syrinx pet            add Argus, the Syrinx mascot, to your Hermes pets\n"
+    "/syrinx auto on|off    auto-focus from presence (macOS)\n"
+    "/syrinx night on|off   queue late-night requests, or not"
 )
 
 
@@ -65,7 +65,7 @@ class _CtxStore(core.Store):
             try:
                 return self._ctx.state.get(key, default=default)
             except Exception:
-                logger.debug("kairos: ctx.state.get failed, using memory", exc_info=True)
+                logger.debug("syrinx: ctx.state.get failed, using memory", exc_info=True)
                 self._broken = True
         return self._fallback.get(key, default)
 
@@ -75,7 +75,7 @@ class _CtxStore(core.Store):
                 self._ctx.state.set(key, value)
                 return
             except Exception:
-                logger.debug("kairos: ctx.state.set failed, using memory", exc_info=True)
+                logger.debug("syrinx: ctx.state.set failed, using memory", exc_info=True)
                 self._broken = True
         self._fallback.set(key, value)
 
@@ -90,7 +90,7 @@ class Runtime:
                 config[key] = ctx.get_config(key, default=default)
             except Exception:
                 config[key] = default
-        self.k = core.Kairos(_CtxStore(ctx), config=config)
+        self.k = core.Syrinx(_CtxStore(ctx), config=config)
         self._status_handles: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._presence_run = presence._run
@@ -149,23 +149,23 @@ class Runtime:
                 else:
                     self._status_handles[session_id] = self.ctx.post_message(text)
             except Exception:
-                logger.debug("kairos: status post failed", exc_info=True)
+                logger.debug("syrinx: status post failed", exc_info=True)
 
     def _changed(self, kind: str) -> None:
         """Tell the Desktop half (pane, chip, pet bubble) that state moved. No-op without Desktop."""
         try:
             from hermes_cli.plugin_events import broadcast_plugin_event  # type: ignore
 
-            broadcast_plugin_event("kairos", "state.changed", {"kind": kind, "line": self.k.status_line()})
+            broadcast_plugin_event("syrinx", "state.changed", {"kind": kind, "line": self.k.status_line()})
         except Exception:
-            logger.debug("kairos: broadcast skipped", exc_info=True)
+            logger.debug("syrinx: broadcast skipped", exc_info=True)
 
     def _llm(self, prompt: str) -> str:
         result = self.ctx.llm.complete(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=240,
             temperature=0.2,
-            purpose="kairos.catchup",
+            purpose="syrinx.catchup",
         )
         return getattr(result, "text", "") or ""
 
@@ -181,18 +181,18 @@ class Runtime:
                 self._changed("parked")
             return directive
         except Exception:
-            logger.debug("kairos: pre_tool_call failed open", exc_info=True)
+            logger.debug("syrinx: pre_tool_call failed open", exc_info=True)
             return None
 
     def post_tool_call(self, tool_name: str = "", args: Optional[dict] = None, result: str = "",
                        task_id: str = "", duration_ms: int = 0, session_id: str = "", **kwargs: Any) -> None:
         try:
-            if tool_name.startswith("kairos_"):
+            if tool_name.startswith("syrinx_"):
                 return
             self.k.record_tool(session_id or task_id, tool_name, args, duration_ms=duration_ms)
             self.presence_tick()
         except Exception:
-            logger.debug("kairos: post_tool_call failed", exc_info=True)
+            logger.debug("syrinx: post_tool_call failed", exc_info=True)
 
     def pre_llm_call(self, session_id: str = "", user_message: Any = "", is_first_turn: bool = False,
                      platform: str = "", **kwargs: Any) -> Optional[Any]:
@@ -220,7 +220,7 @@ class Runtime:
                 contexts.append(self.k.return_context(session_id))
                 self._changed("returned")
 
-            # Answers typed in the Kairos pane since the last turn.
+            # Answers typed in the Syrinx pane since the last turn.
             answered = self.k.take_answered()
             if answered:
                 contexts.append(self.k.answers_context(answered))
@@ -230,14 +230,14 @@ class Runtime:
             if focus.get("active"):
                 until = core.datetime.fromisoformat(focus["until"])
                 contexts.append(
-                    f"Kairos: the user is in a focus block until {core.fmt_clock(until)} and will not read the chat "
-                    "until then. Do not ask them anything now: park questions with kairos_park(question, default, why) "
-                    "and continue with sensible defaults, saying which ones you took. Use kairos_interrupt only if the "
+                    f"Syrinx: the user is in a focus block until {core.fmt_clock(until)} and will not read the chat "
+                    "until then. Do not ask them anything now: park questions with syrinx_park(question, default, why) "
+                    "and continue with sensible defaults, saying which ones you took. Use syrinx_interrupt only if the "
                     "task cannot move at all."
                 )
             return {"context": "\n\n".join(contexts)} if contexts else None
         except Exception:
-            logger.debug("kairos: pre_llm_call failed open", exc_info=True)
+            logger.debug("syrinx: pre_llm_call failed open", exc_info=True)
             return None
 
     def post_llm_call(self, session_id: str = "", assistant_response: Any = "", **kwargs: Any) -> None:
@@ -246,14 +246,14 @@ class Runtime:
             if self.k.focus().get("active") or self.k.parked_open():
                 self._post_status(session_id)
         except Exception:
-            logger.debug("kairos: post_llm_call failed", exc_info=True)
+            logger.debug("syrinx: post_llm_call failed", exc_info=True)
 
     def on_human_input_request(self, kind: str = "", request_id: str = "", **kwargs: Any) -> None:
         try:
             if kind in ("approval", "sudo") and self.k.focus().get("active"):
                 self.k._bump("interruptions_necessary")
         except Exception:
-            logger.debug("kairos: on_human_input_request failed", exc_info=True)
+            logger.debug("syrinx: on_human_input_request failed", exc_info=True)
 
     def on_human_input_resolved(self, **kwargs: Any) -> None:
         return None
@@ -281,7 +281,7 @@ class Runtime:
             return _json({"parked": item["id"], "proceed_with": item["default"],
                           "note": "Continue with the default and say so in your reply."})
         except Exception as exc:
-            return _json_error(f"kairos_park failed: {exc}")
+            return _json_error(f"syrinx_park failed: {exc}")
 
     def tool_interrupt(self, args: Any = None, *, task_id: str = "", session_id: str = "", **kwargs: Any) -> str:
         try:
@@ -292,7 +292,7 @@ class Runtime:
                         urgent=True, source="interrupt")
             return _json({"ok": True, "note": "Ask now with clarify. This counted as an interruption."})
         except Exception as exc:
-            return _json_error(f"kairos_interrupt failed: {exc}")
+            return _json_error(f"syrinx_interrupt failed: {exc}")
 
     def tool_status(self, args: Any = None, **kwargs: Any) -> str:
         try:
@@ -307,7 +307,7 @@ class Runtime:
                 "handed_back_waiting": len(self.k.handed_back_open()),
             })
         except Exception as exc:
-            return _json_error(f"kairos_status failed: {exc}")
+            return _json_error(f"syrinx_status failed: {exc}")
 
     # ----- slash commands --------------------------------------------------------------------
 
@@ -351,7 +351,7 @@ class Runtime:
         match = re.match(r"\s*(\d{1,3})", raw_args or "")
         until = self.k.late(int(match.group(1)) if match else None)
         self._changed("late")
-        return f"Okay. Kairos steps aside until {core.fmt_clock(until)}. It will remind you once after that."
+        return f"Okay. Syrinx steps aside until {core.fmt_clock(until)}. It will remind you once after that."
 
     def cmd_night(self, raw_args: str = "", **kwargs: Any) -> str:
         parts = (raw_args or "").split()
@@ -371,15 +371,15 @@ class Runtime:
         try:
             data = sheet.read_bytes()
         except OSError:
-            return "This copy of Kairos has no pet art. Reinstall the plugin and try again."
+            return "This copy of Syrinx has no pet art. Reinstall the plugin and try again."
         try:
             from agent.pet.store import register_local_pet  # type: ignore
 
             register_local_pet(data, slug="argus", display_name="Argus",
                                description="The hundred-eyed watchman Hermes played to sleep. He keeps your questions until the right moment.")
         except Exception:
-            logger.debug("kairos: could not add the pet", exc_info=True)
-            return "Kairos could not add Argus on this Hermes version. Pets need Hermes with the pet feature."
+            logger.debug("syrinx: could not add the pet", exc_info=True)
+            return "Syrinx could not add Argus on this Hermes version. Pets need Hermes with the pet feature."
         return "Argus is now among your pets. Adopt him with /pet argus (and /pet off sends him away)."
 
     def _save_card(self) -> str:
@@ -388,14 +388,14 @@ class Runtime:
         try:
             folder = self.ctx.state.data_dir
             folder.mkdir(parents=True, exist_ok=True)
-            path = folder / "kairos-receipt.svg"
+            path = folder / "syrinx-receipt.svg"
             path.write_text(svg, encoding="utf-8")
         except Exception:
-            logger.debug("kairos: could not save the card", exc_info=True)
-            return "Kairos could not save the card on this system.\n\n" + self.k.receipt_text()
+            logger.debug("syrinx: could not save the card", exc_info=True)
+            return "Syrinx could not save the card on this system.\n\n" + self.k.receipt_text()
         return f"Receipt card saved: {path}\nIt holds numbers only, no question text and no file names.\n\n" + self.k.receipt_text()
 
-    def cmd_kairos(self, raw_args: str = "", **kwargs: Any) -> str:
+    def cmd_syrinx(self, raw_args: str = "", **kwargs: Any) -> str:
         arg = (raw_args or "").strip().lower()
         if arg in ("receipt", "stats"):
             return self.k.receipt_text()
@@ -412,12 +412,12 @@ class Runtime:
             key = "auto_focus" if parts[0] == "auto" else "night_enabled"
             value = parts[1] == "on"
             if key == "auto_focus" and value and not presence.is_supported():
-                return "Auto-focus needs macOS. On this system Kairos cannot read idle time or the front app."
+                return "Auto-focus needs macOS. On this system Syrinx cannot read idle time or the front app."
             self.k.config[key] = value
             try:
                 self.ctx.set_config(key, value)
             except Exception:
-                logger.debug("kairos: set_config failed", exc_info=True)
+                logger.debug("syrinx: set_config failed", exc_info=True)
             self._changed("settings")
             if key == "auto_focus":
                 return ("Auto-focus on: a block opens when you are active in another app and ends when a Hermes app is in front."
@@ -429,10 +429,10 @@ class Runtime:
 def register(ctx: Any) -> None:
     rt = Runtime(ctx)
 
-    ctx.register_tool(name="kairos_park", toolset="kairos", schema=schemas.KAIROS_PARK, handler=rt.tool_park)
-    ctx.register_tool(name="kairos_interrupt", toolset="kairos", schema=schemas.KAIROS_INTERRUPT,
+    ctx.register_tool(name="syrinx_park", toolset="syrinx", schema=schemas.SYRINX_PARK, handler=rt.tool_park)
+    ctx.register_tool(name="syrinx_interrupt", toolset="syrinx", schema=schemas.SYRINX_INTERRUPT,
                       handler=rt.tool_interrupt)
-    ctx.register_tool(name="kairos_status", toolset="kairos", schema=schemas.KAIROS_STATUS, handler=rt.tool_status)
+    ctx.register_tool(name="syrinx_status", toolset="syrinx", schema=schemas.SYRINX_STATUS, handler=rt.tool_status)
 
     ctx.register_hook("pre_tool_call", rt.pre_tool_call)
     ctx.register_hook("post_tool_call", rt.post_tool_call)
@@ -442,13 +442,13 @@ def register(ctx: Any) -> None:
     ctx.register_hook("on_human_input_resolved", rt.on_human_input_resolved)
 
     # "/focus" is a built-in Hermes command (focus view), so the block is "/flow".
-    ctx.register_command("flow", rt.cmd_focus, description="Start or end a Kairos focus block",
+    ctx.register_command("flow", rt.cmd_focus, description="Start or end a Syrinx focus block",
                          args_hint="[minutes|off]")
     ctx.register_command("catchup", rt.cmd_catchup, description="What happened while you were away, and the parked questions")
-    ctx.register_command("late", rt.cmd_late, description="Keep working past the Kairos cutoff for a while",
+    ctx.register_command("late", rt.cmd_late, description="Keep working past the Syrinx cutoff for a while",
                          args_hint="[minutes]")
-    ctx.register_command("night", rt.cmd_night, description="Set the Kairos cutoff and morning time",
+    ctx.register_command("night", rt.cmd_night, description="Set the Syrinx cutoff and morning time",
                          args_hint="HH:MM [HH:MM]")
-    ctx.register_command("kairos", rt.cmd_kairos, description="Kairos status, receipt and help",
+    ctx.register_command("syrinx", rt.cmd_syrinx, description="Syrinx status, receipt and help",
                          args_hint="[receipt|week|card|pet|help]")
     return rt

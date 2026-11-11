@@ -1,4 +1,4 @@
-"""Kairos core: the state and the rules, with no Hermes imports.
+"""Syrinx core: the state and the rules, with no Hermes imports.
 
 Everything here is plain Python so it can be unit tested without Hermes. ``runtime.py`` wires
 these rules to the Hermes plugin context (hooks, slash commands, tools).
@@ -28,7 +28,7 @@ SUMMARY_MAX_CHARS = 80
 
 
 class Store:
-    """The two calls Kairos needs from storage. ``ctx.state`` already has this shape."""
+    """The two calls Syrinx needs from storage. ``ctx.state`` already has this shape."""
 
     def get(self, key: str, default: Any = None) -> Any:  # pragma: no cover - interface
         raise NotImplementedError
@@ -96,7 +96,7 @@ def summarize_tool_call(tool_name: str, args: Any) -> str:
     return name
 
 
-class Kairos:
+class Syrinx:
     """The rules. One instance per plugin load; thread-safe at the level of each public call."""
 
     def __init__(self, store: Store, *, now: Optional[Callable[[], datetime]] = None,
@@ -311,8 +311,8 @@ class Kairos:
             return [dict(item) for item in fresh]
 
     def answers_context(self, items: list[dict[str, Any]]) -> str:
-        lines = [f"Kairos: the user answered {len(items)} parked question{'s' if len(items) != 1 else ''} in the "
-                 "Kairos pane. Apply each answer; redo any piece where it differs from the default you used:"]
+        lines = [f"Syrinx: the user answered {len(items)} parked question{'s' if len(items) != 1 else ''} in the "
+                 "Syrinx pane. Apply each answer; redo any piece where it differs from the default you used:"]
         for item in items:
             lines.append(f"- {item['id']}: \"{item['question']}\" -> {item['answer']} (default used: {item['default']})")
         return "\n".join(lines)
@@ -389,15 +389,15 @@ class Kairos:
         items = self.park_from_clarify(args, session_id=session_id)
         until = datetime.fromisoformat(focus["until"])
         lines = [
-            f"Kairos: the user is in a focus block until {fmt_clock(until)} and is not reading the chat. "
+            f"Syrinx: the user is in a focus block until {fmt_clock(until)} and is not reading the chat. "
             "This question was parked for them, not shown.",
         ]
         for item in items:
             lines.append(f"- {item['id']}: \"{item['question']}\" parked. Default to use now: {item['default']}.")
         lines.append(
             "Continue the task with those defaults and say in your reply which defaults you took. "
-            "Park anything else with kairos_park(question, default, why). Only if the task truly cannot "
-            "move without an answer, call kairos_interrupt(question, why) and then ask with clarify."
+            "Park anything else with syrinx_park(question, default, why). Only if the task truly cannot "
+            "move without an answer, call syrinx_interrupt(question, why) and then ask with clarify."
         )
         return {"action": "block", "message": "\n".join(lines)}
 
@@ -484,7 +484,7 @@ class Kairos:
         wake = self.wake()
         return (
             f"It is {fmt_clock(self.now())}. Your cutoff is {fmt_clock(datetime.combine(self.now().date(), self.cutoff()))}, "
-            f"so Kairos queued this for the morning brief at {fmt_clock(datetime.combine(self.now().date(), wake))}. "
+            f"so Syrinx queued this for the morning brief at {fmt_clock(datetime.combine(self.now().date(), wake))}. "
             f"Nothing is lost. Type /late to keep going for {LATE_DEFAULT_MINUTES} minutes, or /late 45 for longer. "
             "Sleep well."
         )
@@ -544,7 +544,7 @@ class Kairos:
             counts[key] = counts.get(key, 0) + 1
         top = ", ".join(f"{name} x{n}" if n > 1 else name for name, n in
                         sorted(counts.items(), key=lambda kv: -kv[1])[:6])
-        lines = ["Kairos catch-up"]
+        lines = ["Syrinx catch-up"]
         focus = self._get("focus", {})
         if focus.get("last_minutes") is not None and not focus.get("active"):
             lines.append(f"Focus kept: {fmt_minutes(int(focus.get('last_minutes', 0)))}.")
@@ -579,7 +579,7 @@ class Kairos:
         focus = self._get("focus", {})
         kept = fmt_minutes(int(focus.get("last_minutes", 0)))
         lines = [
-            f"Kairos: the user is back from a focus block ({kept} kept). Before anything else, give a three-line catch-up "
+            f"Syrinx: the user is back from a focus block ({kept} kept). Before anything else, give a three-line catch-up "
             "of what you did and what changed while they were away.",
         ]
         if handed:
@@ -598,12 +598,12 @@ class Kairos:
         count = f"{len(items)} request{'s' if len(items) != 1 else ''}"
         if late:
             lines = [
-                f"Kairos: the user chose /late, so the {count} Kairos had queued for the morning come back now. "
+                f"Syrinx: the user chose /late, so the {count} Syrinx had queued for the morning come back now. "
                 "Acknowledge in one line and start on the first one unless they redirect you:",
             ]
         else:
             lines = [
-                f"Kairos morning brief: the user queued {count} after their cutoff last night. Greet them in one "
+                f"Syrinx morning brief: the user queued {count} after their cutoff last night. Greet them in one "
                 "line, list the requests, and start on the first one unless they redirect you:",
             ]
         for item in items:
@@ -618,11 +618,11 @@ class Kairos:
         parked = len(self.parked_open())
         if focus.get("active"):
             until = datetime.fromisoformat(focus["until"])
-            line = f"Kairos · focus until {fmt_clock(until)} · {fmt_minutes(self.focus_elapsed_minutes())} in"
+            line = f"Syrinx · focus until {fmt_clock(until)} · {fmt_minutes(self.focus_elapsed_minutes())} in"
         elif self.is_night():
-            line = f"Kairos · night until {fmt_clock(datetime.combine(self.now().date(), self.wake()))}"
+            line = f"Syrinx · night until {fmt_clock(datetime.combine(self.now().date(), self.wake()))}"
         else:
-            line = "Kairos · open"
+            line = "Syrinx · open"
         if parked:
             line += f" · {parked} parked"
         return line
@@ -640,7 +640,7 @@ class Kairos:
         queued = int(stats.get("requests_queued", 0))
         urgent = int(stats.get("interruptions_urgent", 0))
         blocks = int(stats.get("blocks_ended", 0))
-        lines = ["Kairos receipt"]
+        lines = ["Syrinx receipt"]
         lines.append(f"Focus kept: {fmt_minutes(minutes)} across {blocks} block{'s' if blocks != 1 else ''}.")
         lines.append(f"Questions parked: {parked}, handed back in batches: {batched}, urgent interruptions: {urgent}.")
         lines.append(f"Late-night requests queued for the morning: {queued}.")
@@ -652,7 +652,7 @@ class Kairos:
     def week_text(self) -> str:
         """The last seven days, one line each, from the per-day counters."""
         days = self._get("stats", {}).get("days", {})
-        lines = ["Kairos, last 7 days"]
+        lines = ["Syrinx, last 7 days"]
         today = self.now().date()
         for offset in range(6, -1, -1):
             day = (today - timedelta(days=offset)).isoformat()

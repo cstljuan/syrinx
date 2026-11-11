@@ -23,6 +23,8 @@ def test_pose_follows_the_state():
     assert letter["pose"] == "letter" and "1 question waiting" in letter["line"]
     assert argus.pose_for(snap(night=True, parked=3))["pose"] == "sleep"
     assert argus.pose_for(snap(late=True))["pose"] == "yawn"
+    assert argus.pose_for(snap(late=True, flow=True))["pose"] == "shush"       # a flow outranks being up late
+    assert argus.pose_for(snap(late=True, parked=1))["pose"] == "letter"
     assert argus.pose_for({})["pose"] == "idle"
 
 

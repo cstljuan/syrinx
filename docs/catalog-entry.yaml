@@ -1,10 +1,10 @@
-# Draft of plugin-catalog/kairos.yaml for the NousResearch/hermes-agent pull request.
+# Draft of plugin-catalog/syrinx.yaml for the NousResearch/hermes-agent pull request.
 # Fill `sha` with the full 40-character commit that is pinned, and bump `version` to match plugin.yaml.
-name: kairos
-title: Kairos
+name: syrinx
+title: Syrinx
 repo: https://github.com/cstljuan/kairos
 sha: REPLACE_WITH_FULL_40_CHAR_COMMIT
-description: "Your agent is fast; Kairos makes sure it waits for the right moment. /flow parks the agent's non-urgent questions while you are heads-down (pre_tool_call on clarify returns the default the agent marked recommended, so it keeps working; approvals and password prompts always reach you), your first message back gets a three-line catch-up and every parked question in one card, requests after your cutoff are queued into a morning brief the agent starts on (/late overrides), and /kairos receipt shows the time it gave back. Desktop: a status-bar chip, a Kairos pane (parked questions answerable in place, night queue, receipt) and the pet's speech bubble carries the status line. Disclosure: no network calls of its own, no shell commands, no background processes; the optional catch-up tightening runs through ctx.llm on the user's active model with no overrides; stores focus blocks, parked questions and defaults, queued late-night request text, per-session tool names with file basenames, the last reply of each session (600 chars) and counters in the profile's plugin state; cron turns are never blocked or queued; no telemetry."
+description: "Your agent is fast; Syrinx makes sure it waits for the right moment. /flow parks the agent's non-urgent questions while you are heads-down (pre_tool_call on clarify returns the default the agent marked recommended, so it keeps working; approvals and password prompts always reach you), your first message back gets a three-line catch-up and every parked question in one card, requests after your cutoff are queued into a morning brief the agent starts on (/late overrides), and /syrinx receipt shows the time it gave back. Desktop: a status-bar chip, a Syrinx pane (parked questions answerable in place, night queue, receipt) and the pet's speech bubble carries the status line. Disclosure: no network calls of its own, no shell commands, no background processes; the optional catch-up tightening runs through ctx.llm on the user's active model with no overrides; stores focus blocks, parked questions and defaults, queued late-night request text, per-session tool names with file basenames, the last reply of each session (600 chars) and counters in the profile's plugin state; cron turns are never blocked or queued; no telemetry."
 maintainer: cstljuan
 tier: community
 category: tools
@@ -15,9 +15,9 @@ readme: true
 platforms: []
 capabilities:
   provides_tools:
-    - kairos_park
-    - kairos_interrupt
-    - kairos_status
+    - syrinx_park
+    - syrinx_interrupt
+    - syrinx_status
   provides_hooks:
     - pre_tool_call
     - post_tool_call

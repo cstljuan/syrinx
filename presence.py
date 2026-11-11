@@ -1,12 +1,12 @@
 """Optional presence probe for auto-focus (off by default, macOS only).
 
-When ``auto_focus`` is on, Kairos asks two read-only questions of the OS: how long since the
+When ``auto_focus`` is on, Syrinx asks two read-only questions of the OS: how long since the
 last key or mouse event, and which app is in front. Both come from stock macOS tools with no
 permission prompt: ``ioreg -c IOHIDSystem`` (HIDIdleTime) and ``lsappinfo`` (the front app's
 bundle id). Nothing is stored: the bundle id is compared in memory and dropped.
 
 The rule: if the person is active at the computer (idle under ``ACTIVE_SECONDS``) and the front
-app is not Hermes or a terminal, they are heads-down somewhere else, and Kairos opens an automatic
+app is not Hermes or a terminal, they are heads-down somewhere else, and Syrinx opens an automatic
 focus block. When a Hermes app is in front again, the block ends and the catch-up follows.
 """
 

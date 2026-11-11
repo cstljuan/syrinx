@@ -1,4 +1,4 @@
-"""Unit tests for the Kairos rules. No Hermes needed: ``python -m pytest tests``."""
+"""Unit tests for the Syrinx rules. No Hermes needed: ``python -m pytest tests``."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class FakeClock:
 
 def make(start: str = "2026-11-10 15:00", **config):
     clock = FakeClock(datetime.fromisoformat(start))
-    k = core.Kairos(core.MemoryStore(), now=clock.now, config=config)
+    k = core.Syrinx(core.MemoryStore(), now=clock.now, config=config)
     return k, clock
 
 
@@ -145,16 +145,16 @@ def test_catchup_uses_llm_when_given_and_falls_back_on_failure():
     def boom(_):
         raise RuntimeError("no model")
 
-    assert "Kairos catch-up" in k.catchup_text("s1", llm=boom)
+    assert "Syrinx catch-up" in k.catchup_text("s1", llm=boom)
 
 
 def test_status_and_receipt_text():
     k, clock = make("2026-11-10 15:00")
-    assert k.status_line() == "Kairos · open"
+    assert k.status_line() == "Syrinx · open"
     k.start_focus(45)
     k.park("q", "d", session_id="s1")
     clock.advance(minutes=5)
-    assert k.status_line() == "Kairos · focus until 3:45 PM · 5 min in · 1 parked"
+    assert k.status_line() == "Syrinx · focus until 3:45 PM · 5 min in · 1 parked"
     receipt = k.receipt_text()
     assert "Questions parked: 1" in receipt
 
@@ -179,7 +179,7 @@ def test_pane_answers_are_delivered_once_and_snapshot_is_complete():
     assert "tabs" in k.answers_context(fresh)
     snap = k.snapshot()
     assert snap["focus"]["active"] and snap["night"]["cutoff"] == "22:30"
-    assert snap["parked"] == [] and "Kairos receipt" in snap["receipt"]
+    assert snap["parked"] == [] and "Syrinx receipt" in snap["receipt"]
 
 
 def test_week_text_and_necessary_interruptions():
@@ -189,7 +189,7 @@ def test_week_text_and_necessary_interruptions():
     clock.advance(minutes=11)
     k.focus()
     week = k.week_text()
-    assert week.startswith("Kairos, last 7 days") and "today: 10 min focus" in week
+    assert week.startswith("Syrinx, last 7 days") and "today: 10 min focus" in week
     assert "Approvals that still reached you during focus: 1." in k.receipt_text()
     snap = k.snapshot()
     assert snap["parked"] == []

@@ -1,4 +1,4 @@
-"""The Kairos receipt card: one 1200x600 SVG, drawn with nothing but the standard library.
+"""The Syrinx receipt card: one 1200x600 SVG, drawn with nothing but the standard library.
 
 It carries numbers only: minutes of focus, counts, seven days. No question text, no file names, no
 session ids, so it is safe to post.
@@ -135,14 +135,14 @@ def _week(days: list[dict[str, Any]], x: float, base: float) -> str:
 
 
 def receipt_svg(data: dict[str, Any]) -> str:
-    """Draw the card from ``Kairos.card_data()``."""
+    """Draw the card from ``Syrinx.card_data()``."""
     totals = data.get("totals", {})
     days = list(data.get("days", []))[-7:]
     minutes = int(totals.get("focus_minutes", 0))
     blocks = int(totals.get("blocks_ended", 0))
     total = _fmt_minutes(minutes)
     plate = _data_uri("card-plate.jpg")
-    label = f"Kairos receipt: {total} of focus kept from interruptions"
+    label = f"Syrinx receipt: {total} of focus kept from interruptions"
 
     defs = ['<filter id="print" x="-5%" y="-20%" width="110%" height="140%">'
             '<feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="1" seed="2" result="n"/>'
@@ -167,7 +167,7 @@ def receipt_svg(data: dict[str, Any]) -> str:
     else:
         parts.append('<rect width="1200" height="600" filter="url(#paper)" opacity="0.5"/>')
 
-    parts.append(_text(66, 88, "KAIROS", size=30, spacing=13))
+    parts.append(_text(66, 88, "SYRINX", size=30, spacing=13))
     parts.append(_text(66, 116, f"time given back  ·  {data.get('date', '')}", size=16, italic=True, fill=SOFT_INK))
 
     # The total, as large as fits on the paper beside the print.

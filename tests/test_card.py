@@ -16,7 +16,7 @@ import core  # noqa: E402
 
 def make():
     clock = {"t": datetime.fromisoformat("2026-11-10 15:00")}
-    return core.Kairos(core.MemoryStore(), now=lambda: clock["t"]), clock
+    return core.Syrinx(core.MemoryStore(), now=lambda: clock["t"]), clock
 
 
 def test_card_is_valid_svg_with_the_numbers():
