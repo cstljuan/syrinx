@@ -121,15 +121,20 @@ def test_focus_flow_end_to_end(rt):
 def test_tools_return_json(rt):
     r, ctx, _ = rt
     ctx.commands["flow"]("45", session_id="s1")
-    parked = json.loads(ctx.tools["kairos_park"](question="Which color?", default="blue", why="brand", task_id="s1"))
+    # Hermes calls a tool as handler(args_dict, **context).
+    parked = json.loads(ctx.tools["kairos_park"]({"question": "Which color?", "default": "blue", "why": "brand"},
+                                                 task_id="s1"))
     assert parked["parked"].startswith("q-") and parked["proceed_with"] == "blue"
-    status = json.loads(ctx.tools["kairos_status"]())
+    assert r.k.parked_open()[0]["question"] == "Which color?"
+    status = json.loads(ctx.tools["kairos_status"]({}, task_id="s1"))
     assert status["focus_active"] and status["parked"] == 1
-    ok = json.loads(ctx.tools["kairos_interrupt"](question="Pay?", why="money", task_id="s1"))
+    ok = json.loads(ctx.tools["kairos_interrupt"]({"question": "Pay?", "why": "money"}, task_id="s1"))
     assert ok["ok"]
+    # Plain keywords still work.
+    assert json.loads(ctx.tools["kairos_park"](question="Old style?", default="yes"))["proceed_with"] == "yes"
     assert ctx.hooks["pre_tool_call"](tool_name="clarify", args={"questions": [{"question": "Pay?"}]},
                                       task_id="s1", session_id="s1") is None
-    assert "question is required" in ctx.tools["kairos_park"](question="", default="x")
+    assert "question is required" in ctx.tools["kairos_park"]({"question": "", "default": "x"})
 
 
 def test_night_blocks_and_morning_delivers(rt):

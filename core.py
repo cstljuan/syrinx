@@ -232,6 +232,10 @@ class Kairos:
     def parked_open(self) -> list[dict[str, Any]]:
         return [item for item in self._get("parked", []) if item.get("status") == "parked"]
 
+    def handed_back_open(self) -> list[dict[str, Any]]:
+        """Questions handed back to the user and not answered yet."""
+        return [item for item in self._get("parked", []) if item.get("status") == "handed_back"]
+
     def park(self, question: str, default: str = "", why: str = "", *, session_id: str = "",
              urgent: bool = False, source: str = "agent") -> dict[str, Any]:
         with self._lock:
@@ -581,6 +585,7 @@ class Kairos:
         if handed:
             lines.append(
                 f"Then ask ALL of these {len(handed)} parked questions in ONE clarify call (one card, several questions), "
+                "or in one single message if you have no clarify tool here, "
                 "with the default you already used marked as recommended, and redo any piece where they pick differently:"
             )
             for item in handed:

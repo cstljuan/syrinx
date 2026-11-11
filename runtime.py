@@ -260,29 +260,41 @@ class Runtime:
 
     # ----- tools -----------------------------------------------------------------------------
 
-    def tool_park(self, question: str = "", default: str = "", why: str = "", task_id: str = "",
-                  session_id: str = "", **kwargs: Any) -> str:
+    @staticmethod
+    def _tool_args(args: Any, extra: dict[str, Any]) -> dict[str, Any]:
+        """Hermes calls a tool as ``handler(args_dict, **context)``. Accept that, and plain keywords."""
+        merged = dict(args) if isinstance(args, dict) else {}
+        for key in ("question", "default", "why"):
+            if key not in merged and key in extra:
+                merged[key] = extra[key]
+        return merged
+
+    def tool_park(self, args: Any = None, *, task_id: str = "", session_id: str = "", **kwargs: Any) -> str:
         try:
-            if not str(question).strip():
+            given = self._tool_args(args, kwargs)
+            question = str(given.get("question") or "").strip()
+            if not question:
                 return _json_error("question is required")
-            item = self.k.park(question, default, why, session_id=session_id or task_id)
+            item = self.k.park(question, str(given.get("default") or ""), str(given.get("why") or ""),
+                               session_id=session_id or task_id)
             self._changed("parked")
             return _json({"parked": item["id"], "proceed_with": item["default"],
                           "note": "Continue with the default and say so in your reply."})
         except Exception as exc:
             return _json_error(f"kairos_park failed: {exc}")
 
-    def tool_interrupt(self, question: str = "", why: str = "", task_id: str = "",
-                       session_id: str = "", **kwargs: Any) -> str:
+    def tool_interrupt(self, args: Any = None, *, task_id: str = "", session_id: str = "", **kwargs: Any) -> str:
         try:
+            given = self._tool_args(args, kwargs)
             sid = session_id or task_id
             self.k.allow_next_clarify(sid)
-            self.k.park(question, "", why, session_id=sid, urgent=True, source="interrupt")
+            self.k.park(str(given.get("question") or ""), "", str(given.get("why") or ""), session_id=sid,
+                        urgent=True, source="interrupt")
             return _json({"ok": True, "note": "Ask now with clarify. This counted as an interruption."})
         except Exception as exc:
             return _json_error(f"kairos_interrupt failed: {exc}")
 
-    def tool_status(self, **kwargs: Any) -> str:
+    def tool_status(self, args: Any = None, **kwargs: Any) -> str:
         try:
             focus = self.k.focus()
             return _json({
@@ -291,6 +303,8 @@ class Runtime:
                 "minutes_left": self.k.focus_remaining_minutes(),
                 "night": self.k.is_night(),
                 "parked": len(self.k.parked_open()),
+                # Questions already handed back to the user this turn and still waiting for an answer.
+                "handed_back_waiting": len(self.k.handed_back_open()),
             })
         except Exception as exc:
             return _json_error(f"kairos_status failed: {exc}")
