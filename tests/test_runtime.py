@@ -49,8 +49,12 @@ class FakeCtx:
         self.commands = {}
         self.posted = []
         self.llm = None
-        self.current_cron_execution = None
+        self.cron = None
         self.config = {}
+
+    def current_cron_execution(self):
+        # A method, exactly as Hermes exposes it: None unless a cron run is executing.
+        return self.cron
 
     def get_config(self, key, default=None):
         return self.config.get(key, default)
@@ -194,8 +198,17 @@ def test_auto_focus_is_off_by_default(rt):
 def test_cron_turns_are_never_blocked(rt):
     r, ctx, clock = rt
     clock["t"] = datetime.fromisoformat("2026-11-10 23:05")
-    ctx.current_cron_execution = object()
+    ctx.cron = object()
     assert ctx.hooks["pre_llm_call"](session_id="cron", user_message="nightly job", is_first_turn=True, platform="cli") is None
+
+
+def test_cron_guard_accepts_a_plain_value_too(rt):
+    r, ctx, clock = rt
+    clock["t"] = datetime.fromisoformat("2026-11-10 23:05")
+    ctx.current_cron_execution = None          # an older host that exposes a value, not a method
+    assert ctx.hooks["pre_llm_call"](session_id="s1", user_message="late idea", platform="cli")["action"] == "block"
+    ctx.current_cron_execution = object()
+    assert ctx.hooks["pre_llm_call"](session_id="s1", user_message="nightly job", platform="cli") is None
 
 
 def test_hooks_never_raise(rt):

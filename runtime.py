@@ -129,8 +129,12 @@ class Runtime:
     # ----- helpers ---------------------------------------------------------------------------
 
     def _in_cron(self) -> bool:
+        """True only while a scheduled (cron) run is executing. Unattended runs are never held back."""
         try:
-            return self.ctx.current_cron_execution is not None
+            current = self.ctx.current_cron_execution
+            if callable(current):          # Hermes exposes it as a method; older hosts as a value
+                current = current()
+            return current is not None
         except Exception:
             return False
 
