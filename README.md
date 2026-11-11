@@ -22,7 +22,7 @@ That plays the whole loop on a private clock with the real rules. It needs no mo
 
 Start a focus block with `/flow 45`, or say it in your own words ("heads down for an hour, don't ping me"). While it runs, a question the agent tries to ask is **parked with the default it would have picked**, and the agent keeps going. Approvals and password prompts always reach you. Syrinx never touches the approval system.
 
-![A flow block in Hermes Desktop: two questions parked, Argus on guard](docs/screenshots/flow-parked.jpg)
+![A flow block in Hermes Desktop: a question parked and a push held, Argus on guard](docs/screenshots/flow-parked.jpg)
 
 ### 2. Return: one card, and a counted report
 
@@ -80,11 +80,11 @@ After your cutoff (10:30 PM by default) a new request is queued instead of start
 
 ### 8. Argus
 
-Argus is the mascot, and he is useful. In the Desktop pane his pose tells you the state at a glance: shushing in a flow, arms crossed when he is holding questions, offering a sealed letter when they wait for you, listening while the card is open, asleep at night.
+Argus is the mascot, and he is useful. In the Desktop pane he is pixel art, and his pose tells you the state at a glance: shushing in a flow, arms crossed when he is holding questions, offering a sealed letter when they wait for you, listening while the card is open, asleep at night.
 
-He is also a full Hermes pet. `/syrinx pet` adds him and `/pet argus` adopts him. He walks, waves, reads while the model thinks, writes while a tool runs, and holds out the letter when the agent is waiting on you. Every frame comes from painted key poses moved in code, so the print never flickers.
+He is also a full Hermes pet. `/syrinx pet` adds him and `/pet argus` adopts him. He walks, waves, reads while the model thinks, writes while a tool runs, and holds out the letter when the agent is waiting on you. Every frame comes from painted key poses moved in code, so the print never flickers. The pet still uses the painted sprite sheet for now.
 
-![Argus, twenty poses](docs/screenshots/argus-poses.jpg)
+![Argus, the pixel poses](docs/screenshots/argus-poses.jpg)
 
 ## Install
 
@@ -188,6 +188,6 @@ hermes plugins doctor . --ci
 hermes plugins validate . --install-deps
 ```
 
-The plugin itself imports nothing outside the standard library. The shipped images in `assets/` are built from the original cyanotype prints with `tools/make_assets.py` and `tools/build_pet.py` (Pillow, numpy and scipy, used only by those scripts). The full-size originals and the large pose cutouts live on the `art` branch so the plugin stays small.
+The plugin itself imports nothing outside the standard library. The shipped images in `assets/` are built from the original cyanotype prints with `tools/make_assets.py` and `tools/build_pet.py` (Pillow, numpy and scipy, used only by those scripts), except the pane poses in `assets/argus/`, which are pixel sprites. The full-size originals and the large pose cutouts live on the `art` branch so the plugin stays small.
 
 MIT licensed.
