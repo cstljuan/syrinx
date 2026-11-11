@@ -22,6 +22,8 @@ PRESENCE_CACHE_SECONDS = 10
 
 _PLUGIN_DIR = Path(__file__).resolve().parent
 
+DEBT_LIMIT = 25      # changing steps built on unconfirmed defaults before the agent is told to stop
+
 HELP = (
     "Syrinx commands\n"
     "/flow [minutes|off]    start or end a focus block (default from settings)\n"
@@ -32,6 +34,7 @@ HELP = (
     "/syrinx [receipt|week] status, the time receipt, or the last 7 days\n"
     "/syrinx card           save the receipt as a shareable image (numbers only)\n"
     "/syrinx pet            add Argus, the Syrinx mascot, to your Hermes pets\n"
+    "/syrinx demo           the whole loop in ten seconds, no model needed\n"
     "/flow weekdays 09:00-11:00   deep-work hours: a flow that starts by itself\n"
     "/syrinx budget N       at most N question cards an hour outside a flow\n"
     "/syrinx auto on|off    auto-focus from presence (macOS)\n"
@@ -275,6 +278,12 @@ class Runtime:
                     "and continue with sensible defaults, saying which ones you took. Use syrinx_interrupt only if the "
                     "task cannot move at all."
                 )
+                debt = self.k.assumption_debt(session_id)
+                if debt >= DEBT_LIMIT:
+                    contexts.append(
+                        f"Syrinx: {debt} changing steps now rest on defaults the user has not confirmed. Stop stacking "
+                        "work on them. Finish only what does not depend on those answers, then stop and say what is waiting."
+                    )
             return {"context": "\n\n".join(contexts)} if contexts else None
         except Exception:
             logger.debug("syrinx: pre_llm_call failed open", exc_info=True)
@@ -503,6 +512,8 @@ class Runtime:
             return self._save_card()
         if arg == "pet":
             return self._add_pet()
+        if arg == "demo":
+            return demo_text()
         budget = re.match(r"budget(?:\s+(\d{1,2}|off))?$", arg)
         if budget:
             if budget.group(1) is None:
@@ -530,6 +541,41 @@ class Runtime:
                         if value else "Auto-focus off. /flow still works by hand.")
             return "Night on: requests after the cutoff are queued for the morning." if value else "Night off."
         return self.k.status_text() + "\n\n" + HELP
+
+
+def demo_text() -> str:
+    """The whole loop in ten seconds, on a private clock and a throwaway store. It runs the real rules,
+    calls no model, and does not touch your state."""
+    clock = {"t": core.datetime(2026, 1, 5, 9, 0)}
+    k = core.Syrinx(core.MemoryStore(), now=lambda: clock["t"])
+    out = ["Syrinx demo (real rules, private clock, your own state is untouched)", ""]
+
+    k.add_standing("Which package manager?", "pnpm")
+    out.append("09:00  You once said /always which package manager = pnpm")
+    k.start_focus(45)
+    out.append("09:00  /flow 45: " + k.status_line())
+    card = {"questions": [{"question": "Which package manager should I use?", "choices": ["npm", "pnpm"]},
+                          {"question": "Keep the old API route?", "choices": ["Keep it", "Remove it"]}]}
+    verdict = k.clarify_directive(card, session_id="demo")
+    out.append("09:07  The agent tries to ask two questions. Syrinx answers:")
+    out += ["         " + line for line in verdict["message"].splitlines()[:6]]
+    for name, args in (("write_file", {"path": "api.py"}), ("terminal", {"command": "pytest -q"}),
+                       ("write_file", {"path": "test_api.py"}), ("terminal", {"command": "git push origin main"})):
+        clock["t"] += core.timedelta(minutes=6)
+        k.record_tool("demo", name, args)
+    clock["t"] = core.datetime(2026, 1, 5, 9, 46)
+    k.focus()
+    out += ["", "09:46  The block ends. " + k.status_line(), "       What the agent is told to show you, counted by code:"]
+    out += ["         " + line for line in k.away_report("demo")]
+    k.take_pending_return()
+    k.return_context("demo")
+    k.note_answer("Keep the old API route?", "Remove it")
+    out += ["", "09:47  You answer the one card: Remove it. The agent redoes that piece."]
+    clock["t"] = core.datetime(2026, 1, 5, 23, 10)
+    out += ["", "23:10  You send one more idea. " + k.night_block_message()]
+    k.queue_for_morning("refactor the auth module", session_id="demo")
+    out += ["", k.receipt_text(), "", "Try it for real: /flow 25, then ask the agent for something that needs a decision."]
+    return "\n".join(out)
 
 
 def register(ctx: Any) -> None:

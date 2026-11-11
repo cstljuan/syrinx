@@ -331,6 +331,20 @@ function Parked({ ctx, data }) {
   })
 }
 
+// What happened during the block, counted by the plugin from the tool calls. The model writes none of it.
+function Away({ data }) {
+  const lines = data.away || []
+  if (!lines.length) return null
+  return jsx(Section, {
+    title: 'Counted while you were away',
+    children: lines.map((line, i) => jsx('div', {
+      className: /^Left your machine/.test(line) ? 'text-xs' : 'text-xs text-(--ui-text-tertiary)',
+      style: /^Left your machine/.test(line) ? { color: 'var(--ui-warning, #d9a441)' } : undefined,
+      children: line
+    }, `a${i}`))
+  })
+}
+
 // Standing answers: questions settled for good, and ones Syrinx noticed you answer the same way.
 function Standing({ ctx, data }) {
   const items = data.standing || []
@@ -517,6 +531,8 @@ function Pane({ ctx }) {
         jsx(Separator, {}),
         jsx(Parked, { ctx, data }),
         jsx(Separator, {}),
+        (data.away || []).length ? jsx(Away, { data }) : null,
+        (data.away || []).length ? jsx(Separator, {}) : null,
         jsx(Standing, { ctx, data }),
         jsx(Separator, {}),
         jsx(Night, { ctx, data }),

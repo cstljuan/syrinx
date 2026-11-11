@@ -315,6 +315,27 @@ def test_flow_tool_hours_and_budget_commands(rt):
     assert "Question budget off" in ctx.commands["syrinx"]("budget off")
 
 
+def test_demo_runs_the_real_rules_without_touching_state(rt):
+    r, ctx, _ = rt
+    before = dict(ctx.state.data)
+    text = ctx.commands["syrinx"]("demo")
+    assert "use: pnpm" in text and "Left your machine or cannot be undone (1): git push" in text
+    assert "Built on 1 unconfirmed default" in text and "queued this for the morning brief" in text
+    assert "Syrinx receipt" in text and "Questions you never had to answer again: 1." in text
+    assert ctx.state.data == before
+
+
+def test_agent_is_told_to_stop_when_too_much_rests_on_unconfirmed_defaults(rt):
+    r, ctx, clock = rt
+    ctx.commands["flow"]("60", session_id="s1")
+    r.k.park("Keep the old API?", "yes", session_id="s1")
+    for index in range(runtime.DEBT_LIMIT):
+        clock["t"] = clock["t"].replace(second=index % 60, minute=clock["t"].minute + (1 if index % 60 == 59 else 0))
+        ctx.hooks["post_tool_call"](tool_name="write_file", args={"path": f"f{index}.py"}, task_id="s1", session_id="s1")
+    turn = ctx.hooks["pre_llm_call"](session_id="s1", user_message="keep going", platform="cli")
+    assert "Stop stacking" in turn["context"]
+
+
 def test_commands_text(rt):
     r, ctx, _ = rt
     assert "Syrinx commands" in ctx.commands["syrinx"]("help")

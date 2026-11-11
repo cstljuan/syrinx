@@ -21,7 +21,7 @@ FOCUS_DEFAULT_MINUTES = 45
 FOCUS_MAX_MINUTES = 240
 LATE_DEFAULT_MINUTES = 20
 LATE_MAX_MINUTES = 90
-TRACE_MAX = 60
+TRACE_MAX = 200
 PARKED_MAX = 40
 QUEUE_MAX = 40
 SUMMARY_MAX_CHARS = 80
@@ -145,6 +145,44 @@ def summarize_tool_call(tool_name: str, args: Any) -> str:
     return name
 
 
+_OUTWARD_COMMANDS = (
+    (r"\bgit\s+push\b", "git push"), (r"\bgit\s+reset\s+--hard\b", "git reset --hard"),
+    (r"\b(npm|pnpm|yarn|cargo|twine|gem)\s+publish\b", "package publish"), (r"\bgh\s+(pr|release|issue)\s+create\b", "gh create"),
+    (r"\brm\s+-[a-zA-Z]*[rf]", "rm -r"), (r"\bcurl\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--data|-d\s)", "curl send"),
+    (r"\b(scp|rsync)\b", "copy to another machine"), (r"\bssh\b", "ssh"), (r"\bdocker\s+push\b", "docker push"),
+    (r"\bkubectl\s+(apply|delete)\b", "kubectl change"), (r"\b(terraform|pulumi)\s+(apply|destroy|up)\b", "infrastructure change"),
+    (r"\bdrop\s+(table|database)\b", "drop table"),
+)
+_OUTWARD_TOOLS = re.compile(r"(send|post|publish|email|tweet|deploy|upload|pay|purchase|checkout|delete|remove|transfer)", re.I)
+_WRITE_TOOLS = re.compile(r"(write|patch|edit|create_file|str_replace|apply_diff|notebook)", re.I)
+_READ_TOOLS = re.compile(r"(read|search|list|grep|glob|find|view|cat)", re.I)
+
+
+def classify_tool_call(tool_name: str, args: Any) -> tuple[str, str]:
+    """``(kind, flag)`` for the away report. ``kind`` is write, run, read, web, outward, delegate or other.
+    ``flag`` is a short fixed label for an action that left the machine or cannot be undone, never the
+    command itself."""
+    args = args if isinstance(args, dict) else {}
+    name = str(tool_name or "")
+    if name in ("terminal", "execute_code", "shell", "bash"):
+        command = str(args.get("command") or args.get("code") or "")
+        for pattern, label in _OUTWARD_COMMANDS:
+            if re.search(pattern, command, re.I):
+                return "outward", label
+        return "run", ""
+    if name.startswith(("web_", "browser")):
+        return "web", ""
+    if name == "delegate_task":
+        return "delegate", ""
+    if _WRITE_TOOLS.search(name):
+        return "write", ""
+    if _OUTWARD_TOOLS.search(name):
+        return "outward", name[:40]
+    if _READ_TOOLS.search(name):
+        return "read", ""
+    return "other", ""
+
+
 class Syrinx:
     """The rules. One instance per plugin load; thread-safe at the level of each public call."""
 
@@ -243,6 +281,7 @@ class Syrinx:
         self._set("focus", {
             "active": False,
             "ended": end.isoformat(),
+            "last_started": focus.get("started"),
             "reason": reason,
             "last_minutes": minutes,
             "pending_return": True,
@@ -589,6 +628,8 @@ class Syrinx:
             },
             "parked": self.parked_open(),
             "handed_back": len(self.handed_back_open()),
+            "away": self.away_report("*"),
+            "debt": self.assumption_debt("*"),
             "windows": self.windows(),
             "budget": self.budget(),
             "standing": self.standing(),
@@ -830,8 +871,12 @@ class Syrinx:
         with self._lock:
             trace = self._get("trace", {})
             rows = trace.setdefault(session_id or "*", [])
-            rows.append({"t": self.now().isoformat(), "what": summarize_tool_call(tool_name, args),
-                         "ms": int(duration_ms or 0)})
+            kind, flag = classify_tool_call(tool_name, args)
+            row = {"t": self.now().isoformat(), "what": summarize_tool_call(tool_name, args),
+                   "ms": int(duration_ms or 0), "kind": kind}
+            if flag:
+                row["flag"] = flag
+            rows.append(row)
             if len(rows) > TRACE_MAX:
                 del rows[: len(rows) - TRACE_MAX]
             self._set("trace", trace)
@@ -845,13 +890,81 @@ class Syrinx:
 
     def trace_rows(self, session_id: str) -> list[dict[str, Any]]:
         trace = self._get("trace", {})
-        return list(trace.get(session_id or "*", []))
+        if session_id in ("", "*"):        # every session, for the pane, which has no session of its own
+            rows = [row for session_rows in trace.values() for row in session_rows]
+            return sorted(rows, key=lambda row: str(row.get("t", "")))
+        return list(trace.get(session_id, []))
 
     def clear_trace(self, session_id: str) -> None:
         with self._lock:
             trace = self._get("trace", {})
             trace.pop(session_id or "*", None)
             self._set("trace", trace)
+
+    def _block_rows(self, session_id: str) -> list[dict[str, Any]]:
+        """Trace rows of the current block, or of the last one that ended."""
+        focus = self._get("focus", {})
+        since = focus.get("started") if focus.get("active") else focus.get("last_started")
+        rows = self.trace_rows(session_id)
+        return [row for row in rows if not since or str(row.get("t", "")) >= since]
+
+    def away_report(self, session_id: str) -> list[str]:
+        """What happened during the block, counted by code from the tool calls themselves. No model
+        wrote any of it, so it cannot be flattering. Lines, most important first."""
+        rows = self._block_rows(session_id)
+        if not rows:
+            return []
+        by_kind: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_kind.setdefault(row.get("kind", "other"), []).append(row)
+
+        def names(kind_rows: list[dict[str, Any]], limit: int = 5) -> str:
+            seen: list[str] = []
+            for row in kind_rows:
+                label = " ".join(str(row.get("what", "")).split(" ")[1:]) or str(row.get("what", ""))
+                if label and label not in seen:
+                    seen.append(label)
+            extra = f", and {len(seen) - limit} more" if len(seen) > limit else ""
+            return ", ".join(seen[:limit]) + extra
+
+        lines: list[str] = []
+        outward = by_kind.get("outward", [])
+        if outward:
+            flags: list[str] = []
+            for row in outward:
+                if row.get("flag") and row["flag"] not in flags:
+                    flags.append(row["flag"])
+            lines.append(f"Left your machine or cannot be undone ({len(outward)}): {', '.join(flags)}. Check these first.")
+        written = by_kind.get("write", [])
+        if written:
+            lines.append(f"Files changed ({len(written)} edits): {names(written)}.")
+        ran = by_kind.get("run", [])
+        if ran:
+            lines.append(f"Commands run ({len(ran)}): {names(ran)}.")
+        if by_kind.get("read"):
+            lines.append(f"Read or searched: {len(by_kind['read'])}.")
+        if by_kind.get("web"):
+            lines.append(f"Web lookups: {len(by_kind['web'])}.")
+        if by_kind.get("delegate"):
+            lines.append(f"Subagents started: {len(by_kind['delegate'])}.")
+        if not outward:
+            lines.append("Nothing left your machine.")
+        debt = self.assumption_debt(session_id)
+        if debt:
+            waiting = len(self.parked_open()) or len(self.handed_back_open())
+            lines.append(f"Built on {waiting} unconfirmed default{'s' if waiting != 1 else ''}: {debt} step{'s' if debt != 1 else ''}. "
+                         "Changing an answer may mean redoing them.")
+        return lines
+
+    def assumption_debt(self, session_id: str) -> int:
+        """How many changing steps (edits, commands, outward actions) were taken after the first
+        question was parked and before it was answered. The cost of a wrong default grows with this."""
+        waiting = [item for item in self._get("parked", []) if item.get("status") in ("parked", "handed_back")]
+        if not waiting:
+            return 0
+        first = min(str(item.get("created", "")) for item in waiting)
+        return sum(1 for row in self.trace_rows(session_id)
+                   if row.get("kind") in ("write", "run", "outward") and str(row.get("t", "")) >= first)
 
     def catchup_text(self, session_id: str, *, llm: Optional[Callable[[str], str]] = None) -> str:
         """The catch-up a person reads when they come back. Deterministic; ``llm`` can tighten it."""
@@ -869,6 +982,10 @@ class Syrinx:
             lines.append(f"Focus kept: {fmt_minutes(int(focus.get('last_minutes', 0)))}.")
         if rows:
             lines.append(f"The agent made {len(rows)} tool calls: {top}.")
+        report = self.away_report(session_id)
+        if report:
+            lines.append("Counted from the tool calls, not written by the model:")
+            lines += [f"  {line}" for line in report]
         if reply:
             lines.append(f"Last reply: {reply[:300]}")
         open_items = self.parked_open()
@@ -886,7 +1003,8 @@ class Syrinx:
                     "what happened, what changed, what needs them. Keep every question id exactly. Plain text.\n\n" + text
                 )
                 if isinstance(tightened, str) and tightened.strip():
-                    return tightened.strip()
+                    proof = "\n".join(f"  {line}" for line in report)
+                    return tightened.strip() + (f"\n\nCounted from the tool calls, not written by the model:\n{proof}" if report else "")
             except Exception:
                 pass
         return text
@@ -901,6 +1019,11 @@ class Syrinx:
             f"Syrinx: the user is back from a focus block ({kept} kept). Before anything else, give a three-line catch-up "
             "of what you did and what changed while they were away.",
         ]
+        report = self.away_report(session_id)
+        if report:
+            lines.append("After your catch-up, show this list exactly as written, under the heading "
+                         "\"Counted by Syrinx\". It was counted by code from your tool calls; do not reword or drop lines:")
+            lines += [f"  - {line}" for line in report]
         if handed:
             lines.append(
                 f"Then ask ALL of these {len(handed)} parked questions in ONE clarify call (one card, several questions), "

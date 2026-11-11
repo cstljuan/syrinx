@@ -140,7 +140,9 @@ def test_trace_keeps_no_arguments_only_safe_summaries():
 def test_catchup_uses_llm_when_given_and_falls_back_on_failure():
     k, _ = make()
     k.record_tool("s1", "read_file", {"path": "a.py"})
-    assert k.catchup_text("s1", llm=lambda p: "tight") == "tight"
+    tightened = k.catchup_text("s1", llm=lambda p: "tight")
+    # The model may tighten the prose, but the counted lines are appended untouched.
+    assert tightened.startswith("tight") and "Counted from the tool calls" in tightened and "Read or searched: 1." in tightened
 
     def boom(_):
         raise RuntimeError("no model")
@@ -318,4 +320,48 @@ def test_morning_brief_carries_yesterday():
     clock.t = datetime.fromisoformat("2026-11-11 08:05")
     text = k.morning_context(k.take_morning_brief())
     assert "write the report" in text and "yesterday Syrinx kept 1 h" in text and "still waiting" in text
+
+
+def test_away_report_is_counted_and_flags_what_left_the_machine():
+    k, clock = make()
+    k.start_focus(30)
+    k.record_tool("s1", "read_file", {"path": "/x/app.py"})
+    k.record_tool("s1", "write_file", {"path": "/x/app.py", "content": "secret"})
+    k.record_tool("s1", "patch", {"path": "/x/test_app.py"})
+    k.record_tool("s1", "terminal", {"command": "pytest -q"})
+    k.record_tool("s1", "web_search", {"query": "fastapi lifespan"})
+    quiet = k.away_report("s1")
+    assert "Files changed (2 edits): app.py, test_app.py." in quiet and "Commands run (1): pytest." in quiet
+    assert "Nothing left your machine." in quiet and not any("unconfirmed" in line for line in quiet)
+    # A parked default, then more work on top of it, then a push.
+    clock.advance(minutes=1)
+    k.park("Keep the old API?", "yes", session_id="s1")
+    clock.advance(minutes=1)
+    k.record_tool("s1", "write_file", {"path": "/x/api.py"})
+    k.record_tool("s1", "terminal", {"command": "git push origin main --token=abc123"})
+    report = k.away_report("s1")
+    assert report[0].startswith("Left your machine or cannot be undone (1): git push.")
+    assert any("Built on 1 unconfirmed default: 2 steps" in line for line in report)
+    assert k.assumption_debt("s1") == 2
+    text = "\n".join(report)
+    assert "abc123" not in text and "secret" not in text and "/x/" not in text
+    # The pane sees every session; the return context tells the agent to show the list as written.
+    assert k.snapshot()["away"] == k.away_report("*") and k.snapshot()["debt"] == 2
+    clock.advance(minutes=31)
+    assert k.take_pending_return()
+    context = k.return_context("s1")
+    assert "Counted by Syrinx" in context and "git push" in context
+    # Another block starts clean.
+    k.start_focus(30)
+    assert k.away_report("s1") == []
+
+
+def test_classify_tool_calls():
+    assert core.classify_tool_call("terminal", {"command": "ls -la"}) == ("run", "")
+    assert core.classify_tool_call("terminal", {"command": "rm -rf build"}) == ("outward", "rm -r")
+    assert core.classify_tool_call("terminal", {"command": "curl -X POST https://x"}) == ("outward", "curl send")
+    assert core.classify_tool_call("send_message", {"text": "hi"}) == ("outward", "send_message")
+    assert core.classify_tool_call("search_files", {"pattern": "x"}) == ("read", "")
+    assert core.classify_tool_call("browser_click", {}) == ("web", "")
+    assert core.classify_tool_call("delegate_task", {}) == ("delegate", "")
 
