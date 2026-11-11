@@ -419,7 +419,8 @@ class Syrinx:
         items = self._get("standing", [])
         if not items:
             return ""
-        lines = ["Syrinx: the user has already settled these questions for good. Use the answer, do not ask again:"]
+        lines = ["Syrinx: the user has already settled these questions for good. If one comes up, use the answer and do "
+                 "not ask again. Do not mention this list or any answer that does not apply to the task:"]
         lines += [f"- {item['question']} -> {item['answer']}" for item in items[-25:]]
         return "\n".join(lines)
 
@@ -496,6 +497,7 @@ class Syrinx:
                 "queued": self.queued_open(),
             },
             "parked": self.parked_open(),
+            "handed_back": len(self.handed_back_open()),
             "standing": self.standing(),
             "suggested": self.suggested(),
             "stats": self.stats(),

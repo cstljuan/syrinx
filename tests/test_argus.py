@@ -26,13 +26,15 @@ def test_pose_follows_the_state():
     assert argus.pose_for(snap(late=True, flow=True))["pose"] == "shush"       # a flow outranks being up late
     assert argus.pose_for(snap(late=True, parked=1))["pose"] == "letter"
     assert argus.pose_for({})["pose"] == "idle"
+    card = dict(snap(), handed_back=2)
+    assert argus.pose_for(card)["pose"] == "waiting" and "2 questions are on the card" in argus.pose_for(card)["line"]
 
 
 def test_every_pose_the_rules_can_pick_has_art():
     names = argus.pose_names()
     if not names:          # a checkout without the art still works: the pane draws Argus itself
         return
-    for wanted in ("idle", "shush", "guard", "letter", "sleep", "yawn"):
+    for wanted in ("idle", "shush", "guard", "letter", "waiting", "sleep", "yawn"):
         assert wanted in names
         assert argus.pose_data_uri(wanted).startswith("data:image/webp;base64,")
 

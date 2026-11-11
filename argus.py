@@ -50,4 +50,8 @@ def pose_for(snapshot: dict[str, Any]) -> dict[str, str]:
         return {"pose": "yawn", "line": "Up late. Argus is keeping you company."}
     if parked:
         return {"pose": "letter", "line": f"{parked} {questions} waiting. Say /catchup."}
+    handed = int(snapshot.get("handed_back") or 0)
+    if handed:
+        word = "question is" if handed == 1 else "questions are"
+        return {"pose": "waiting", "line": f"Your {handed} {word} on the card. Argus is listening."}
     return {"pose": "idle", "line": "Argus is watching. Start a flow and he will hold the questions."}
