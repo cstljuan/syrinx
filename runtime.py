@@ -32,6 +32,8 @@ HELP = (
     "/syrinx [receipt|week] status, the time receipt, or the last 7 days\n"
     "/syrinx card           save the receipt as a shareable image (numbers only)\n"
     "/syrinx pet            add Argus, the Syrinx mascot, to your Hermes pets\n"
+    "/flow weekdays 09:00-11:00   deep-work hours: a flow that starts by itself\n"
+    "/syrinx budget N       at most N question cards an hour outside a flow\n"
     "/syrinx auto on|off    auto-focus from presence (macOS)\n"
     "/syrinx night on|off   queue late-night requests, or not"
 )
@@ -103,6 +105,11 @@ class Runtime:
     def presence_tick(self, *, force: bool = False) -> None:
         """Open or close an automatic focus block from the OS presence probe. Off unless
         ``auto_focus`` is set; never runs more than once per PRESENCE_CACHE_SECONDS."""
+        try:
+            if self.k.schedule_tick():
+                self._changed("flow_on")
+        except Exception:
+            logger.debug("syrinx: schedule tick failed", exc_info=True)
         if not bool(self.k.config.get("auto_focus", False)):
             return
         now = time.monotonic()
@@ -327,6 +334,23 @@ class Runtime:
         except Exception as exc:
             return _json_error(f"syrinx_interrupt failed: {exc}")
 
+    def tool_flow(self, args: Any = None, *, task_id: str = "", session_id: str = "", **kwargs: Any) -> str:
+        try:
+            given = args if isinstance(args, dict) else kwargs
+            minutes = int(given.get("minutes") or 0)
+            if minutes <= 0:
+                ended = self.k.end_focus("user said so")
+                self._changed("flow_off")
+                return _json({"ended": bool(ended.get("ended")), "parked": ended.get("parked", 0),
+                              "note": "Hand back any parked questions in one card now."})
+            focus = self.k.start_focus(minutes, source="said")
+            self._post_status(session_id or task_id)
+            self._changed("flow_on")
+            return _json({"focus_until": focus["until"], "minutes": focus["minutes"],
+                          "note": "Park questions with syrinx_park until then. Confirm in one short line."})
+        except Exception as exc:
+            return _json_error(f"syrinx_flow failed: {exc}")
+
     def tool_status(self, args: Any = None, **kwargs: Any) -> str:
         try:
             focus = self.k.focus()
@@ -356,6 +380,23 @@ class Runtime:
             return f"Focus ended: {core.fmt_minutes(ended['minutes'])} kept.{tail}"
         if arg in ("status", "?"):
             return self.k.status_text()
+        # Deep-work hours: /flow weekdays 09:00-11:00, /flow hours, /flow hours clear
+        if arg in ("hours", "schedule"):
+            return self.k.windows_text()
+        if arg in ("hours clear", "schedule clear"):
+            count = self.k.clear_windows()
+            self._changed("hours")
+            return f"Removed {count} deep-work window{'s' if count != 1 else ''}."
+        window = re.match(r"(daily|weekdays|weekends)\s+(\d{1,2}:\d{2})\s*(?:-|to)\s*(\d{1,2}:\d{2})$", arg)
+        if window:
+            try:
+                made = self.k.add_window(*window.groups())
+            except ValueError as exc:
+                return f"Could not set that: {exc}."
+            self.k.schedule_tick()
+            self._changed("hours")
+            return (f"Deep-work hours set: {made['days']} {made['start']} to {made['end']}. A flow starts by itself "
+                    "then. /flow hours lists them, /flow off ends today's early.")
         minutes = None
         match = re.match(r"(\d{1,3})", arg)
         if match:
@@ -462,6 +503,16 @@ class Runtime:
             return self._save_card()
         if arg == "pet":
             return self._add_pet()
+        budget = re.match(r"budget(?:\s+(\d{1,2}|off))?$", arg)
+        if budget:
+            if budget.group(1) is None:
+                now = self.k.budget()
+                return (f"Question budget: {now} card{'s' if now != 1 else ''} an hour outside a flow." if now else
+                        "No question budget. /syrinx budget 3 lets the agent show you at most 3 question cards an hour.")
+            value = self.k.set_budget(0 if budget.group(1) == "off" else int(budget.group(1)))
+            self._changed("settings")
+            return (f"Question budget set: {value} an hour. Extra questions are parked and come back with your next message."
+                    if value else "Question budget off.")
         parts = arg.split()
         if len(parts) == 2 and parts[0] in ("auto", "night") and parts[1] in ("on", "off"):
             key = "auto_focus" if parts[0] == "auto" else "night_enabled"
@@ -488,6 +539,7 @@ def register(ctx: Any) -> None:
     ctx.register_tool(name="syrinx_interrupt", toolset="syrinx", schema=schemas.SYRINX_INTERRUPT,
                       handler=rt.tool_interrupt)
     ctx.register_tool(name="syrinx_status", toolset="syrinx", schema=schemas.SYRINX_STATUS, handler=rt.tool_status)
+    ctx.register_tool(name="syrinx_flow", toolset="syrinx", schema=schemas.SYRINX_FLOW, handler=rt.tool_flow)
 
     ctx.register_hook("pre_tool_call", rt.pre_tool_call)
     ctx.register_hook("post_tool_call", rt.post_tool_call)

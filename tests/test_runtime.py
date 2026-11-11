@@ -85,7 +85,7 @@ def rt():
 
 def test_registration_matches_manifest(rt):
     _, ctx, _ = rt
-    assert set(ctx.tools) == {"syrinx_park", "syrinx_interrupt", "syrinx_status"}
+    assert set(ctx.tools) == {"syrinx_park", "syrinx_interrupt", "syrinx_status", "syrinx_flow"}
     assert set(ctx.hooks) == {"pre_tool_call", "post_tool_call", "pre_llm_call", "post_llm_call",
                               "on_human_input_request", "on_human_input_resolved"}
     assert set(ctx.commands) == {"flow", "catchup", "late", "night", "always", "syrinx"}
@@ -295,6 +295,24 @@ def test_always_command_and_learning_from_real_clarify_answers(rt):
     ctx.hooks["post_tool_call"](tool_name="clarify", args=card, result="not json", task_id="s1")
     ctx.hooks["post_tool_call"](tool_name="clarify", args=card, task_id="s1",
                                 result=json.dumps({"responses": [{"status": "skipped", "user_response": None}]}))
+
+
+def test_flow_tool_hours_and_budget_commands(rt):
+    r, ctx, clock = rt
+    started = json.loads(ctx.tools["syrinx_flow"]({"minutes": 60}, task_id="s1"))
+    assert started["minutes"] == 60 and r.k.focus()["source"] == "said"
+    ended = json.loads(ctx.tools["syrinx_flow"]({"minutes": 0}, task_id="s1"))
+    assert ended["ended"] is True and not r.k.focus()["active"]
+    assert "No deep-work hours" in ctx.commands["flow"]("hours", session_id="s1")
+    assert "Deep-work hours set: weekdays 16:00 to 17:00" in ctx.commands["flow"]("weekdays 16:00-17:00", session_id="s1")
+    assert "Could not set that" in ctx.commands["flow"]("daily 11:00-09:00", session_id="s1")
+    clock["t"] = datetime.fromisoformat("2026-11-10 16:10")
+    ctx.hooks["post_tool_call"](tool_name="read_file", args={"path": "a.py"}, task_id="s1")
+    assert r.k.focus()["active"] and r.k.focus()["source"] == "schedule"
+    assert "Removed 1 deep-work window" in ctx.commands["flow"]("hours clear", session_id="s1")
+    assert "No question budget" in ctx.commands["syrinx"]("budget")
+    assert "Question budget set: 3" in ctx.commands["syrinx"]("budget 3")
+    assert "Question budget off" in ctx.commands["syrinx"]("budget off")
 
 
 def test_commands_text(rt):

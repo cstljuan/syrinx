@@ -12,6 +12,7 @@ provides_tools:
   - syrinx_park
   - syrinx_interrupt
   - syrinx_status
+  - syrinx_flow
 provides_hooks:
   - pre_tool_call
   - post_tool_call
@@ -31,7 +32,7 @@ config_schema:
   focus_minutes:
     type: int
     default: 45
-    description: "Length of a focus block started with /focus and no number."
+    description: "Length of a focus block started with /flow and no number."
   night_enabled:
     type: bool
     default: true
@@ -44,6 +45,10 @@ config_schema:
     type: int
     default: 30
     description: "Length of an automatic focus block; it is extended while you stay in another app."
+  question_budget:
+    type: int
+    default: 0
+    description: "Outside a focus block, the most question cards the agent may show you per hour. Extra questions are parked and come back with your next message. 0 means no limit."
   hermes_apps:
     type: str
     default: ""

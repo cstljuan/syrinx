@@ -62,6 +62,11 @@ def _broadcast(kind: str, line: str) -> None:
 
 
 def _snapshot(k) -> dict[str, Any]:
+    try:
+        if k.schedule_tick():          # the pane polls, so deep-work hours start on time even when idle
+            _broadcast("flow_on", k.status_line())
+    except Exception:
+        logger.debug("syrinx api: schedule tick failed", exc_info=True)
     snap = k.snapshot()
     snap["argus"] = _argus.pose_for(snap)
     return snap
@@ -148,7 +153,7 @@ def card() -> dict[str, Any]:
 @router.post("/always")
 def always(body: dict) -> dict[str, Any]:
     """Make a standing answer: from a parked question (``id``), a suggestion (``suggestion``), or free text."""
-    k = _kairos()
+    k = _syrinx()
     body = body if isinstance(body, dict) else {}
     if body.get("id"):
         item = k.always_from_parked(str(body["id"]))
@@ -162,7 +167,7 @@ def always(body: dict) -> dict[str, Any]:
 
 @router.post("/always/forget")
 def always_forget(body: dict) -> dict[str, Any]:
-    k = _kairos()
+    k = _syrinx()
     item = k.forget_standing(str((body or {}).get("id") or ""))
     _broadcast("standing", k.status_line())
     return {"ok": item is not None, "snapshot": _snapshot(k)}

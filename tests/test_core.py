@@ -259,3 +259,63 @@ def test_answer_in_chat_closes_a_handed_back_question_and_always_from_parked():
     made = k.always_from_parked(item["id"])
     assert made["answer"] == "no, remove it"
 
+
+def test_deep_work_hours_start_a_flow_once_a_day():
+    k, clock = make("2026-11-10 08:30")           # a Tuesday
+    k.add_window("weekdays", "09:00", "11:00")
+    assert k.schedule_tick() is False
+    clock.t = datetime.fromisoformat("2026-11-10 09:05")
+    assert k.schedule_tick() is True
+    focus = k.focus()
+    assert focus["active"] and focus["source"] == "schedule" and focus["minutes"] == 115
+    k.end_focus()
+    assert k.schedule_tick() is False              # ended early: it does not come back today
+    clock.t = datetime.fromisoformat("2026-11-11 09:00")
+    assert k.schedule_tick() is True               # next day it does
+    clock.t = datetime.fromisoformat("2026-11-14 09:30")   # Saturday
+    k.end_focus()
+    assert k.schedule_tick() is False
+    with pytest.raises(ValueError):
+        k.add_window("weekdays", "11:00", "09:00")
+    assert "weekdays 09:00 to 11:00" in k.windows_text() and k.clear_windows() == 1
+
+
+def test_question_budget_parks_the_extra_cards_and_hands_them_back():
+    k, clock = make()
+    k.set_budget(1)
+    card = {"questions": [{"question": "Which region?", "choices": ["us-east", "eu-west"]}]}
+    assert k.clarify_directive(card, session_id="s1") is None              # the first card reaches the user
+    over = k.clarify_directive({"questions": [{"question": "Which tier?", "choices": ["small", "large"]}]}, session_id="s1")
+    assert over["action"] == "block" and "1 question cards an hour" in over["message"]
+    assert k.parked_open()[0]["default"] == "small"
+    assert k.take_pending_return() is True and k.take_pending_return() is False
+    clock.advance(minutes=61)
+    assert k.clarify_directive(card, session_id="s1") is None              # an hour later the budget is back
+    k.set_budget(0)
+    assert k.budget() == 0
+
+
+def test_default_hit_rate_counts_kept_and_changed():
+    k, clock = make()
+    k.start_focus(10)
+    first = k.park("Keep the old API?", "yes (Recommended)", session_id="s1")
+    second = k.park("Which port?", "8080", session_id="s1")
+    k.answer(first["id"], "yes")
+    k.answer(second["id"], "9090")
+    stats = k.stats()
+    assert stats["defaults_kept"] == 1 and stats["defaults_changed"] == 1
+    assert "Defaults you kept: 1 of 2" in k.receipt_text()
+
+
+def test_morning_brief_carries_yesterday():
+    k, clock = make("2026-11-10 15:00")
+    k.start_focus(60)
+    k.park("q", "d", session_id="s1")
+    clock.advance(minutes=61)
+    k.focus()
+    clock.t = datetime.fromisoformat("2026-11-10 23:10")
+    k.queue_for_morning("write the report", session_id="s1")
+    clock.t = datetime.fromisoformat("2026-11-11 08:05")
+    text = k.morning_context(k.take_morning_brief())
+    assert "write the report" in text and "yesterday Syrinx kept 1 h" in text and "still waiting" in text
+

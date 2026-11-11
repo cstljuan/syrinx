@@ -45,3 +45,21 @@ SYRINX_STATUS = {
     ),
     "parameters": {"type": "object", "properties": {}},
 }
+
+SYRINX_FLOW = {
+    "name": "syrinx_flow",
+    "description": (
+        "Start or end a focus block for the user. Call it only when the user says so in their own words, "
+        "for example \"heads down for an hour\", \"brb 30 minutes, don't ping me\", \"I'm in a meeting until 3\", "
+        "or \"I'm back, you can ask me things again\". While a block runs, park your questions with syrinx_park. "
+        "Never start one on your own initiative."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "minutes": {"type": "integer", "description": "Length of the block in minutes, from what the user said. 0 ends the running block."},
+        },
+        "required": ["minutes"],
+    },
+}
+

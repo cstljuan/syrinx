@@ -274,7 +274,87 @@ class Syrinx:
                 focus["pending_return"] = False
                 self._set("focus", focus)
                 return True
+            if self._get("budget_return", False) and not focus.get("active"):
+                self._set("budget_return", False)
+                return True
             return False
+
+    # ----- deep-work hours -------------------------------------------------------------------
+    # Flow that starts by itself: "every weekday 09:00 to 11:00". Checked lazily, no scheduler needed.
+
+    DAY_SETS = {"daily": tuple(range(7)), "weekdays": tuple(range(5)), "weekends": (5, 6)}
+
+    def windows(self) -> list[dict[str, Any]]:
+        return list(self._get("windows", []))
+
+    def add_window(self, days: str, start: str, end: str) -> dict[str, Any]:
+        first, last = parse_hhmm(start), parse_hhmm(end)
+        if days not in self.DAY_SETS or first is None or last is None or first >= last:
+            raise ValueError("use daily, weekdays or weekends, then HH:MM-HH:MM with the end after the start")
+        window = {"id": _new_id("w"), "days": days, "start": first.strftime("%H:%M"), "end": last.strftime("%H:%M")}
+        self._set("windows", (self._get("windows", []) + [window])[-8:])
+        return window
+
+    def clear_windows(self) -> int:
+        count = len(self._get("windows", []))
+        self._set("windows", [])
+        return count
+
+    def current_window(self, moment: Optional[datetime] = None) -> Optional[tuple[dict[str, Any], datetime]]:
+        now = moment or self.now()
+        for window in self._get("windows", []):
+            if now.weekday() not in self.DAY_SETS.get(window.get("days"), ()):
+                continue
+            start = datetime.combine(now.date(), parse_hhmm(window["start"]))
+            end = datetime.combine(now.date(), parse_hhmm(window["end"]))
+            if start <= now < end:
+                return window, end
+        return None
+
+    def schedule_tick(self) -> bool:
+        """Open the scheduled block if one should be running now. True if this call opened it.
+        A window opens once a day: ending it early does not make it come back."""
+        found = self.current_window()
+        if not found or self.focus().get("active"):
+            return False
+        window, end = found
+        key = f"{window['id']}:{end.date().isoformat()}"
+        if self._get("window_done", "") == key:
+            return False
+        self._set("window_done", key)
+        self.start_focus(max(1, int((end - self.now()).total_seconds() // 60)), source="schedule")
+        return True
+
+    def windows_text(self) -> str:
+        items = self._get("windows", [])
+        if not items:
+            return ("No deep-work hours set. Example: /flow weekdays 09:00-11:00 starts a flow by itself "
+                    "every weekday morning.")
+        lines = ["Deep-work hours (flow starts by itself):"]
+        lines += [f"- {w['days']} {w['start']} to {w['end']}" for w in items]
+        lines.append("/flow hours clear removes them.")
+        return "\n".join(lines)
+
+    # ----- question budget -------------------------------------------------------------------
+    # Outside a flow: at most N question cards an hour. The rest are parked and come back with the
+    # user's next message.
+
+    def budget(self) -> int:
+        try:
+            return max(0, int(self._get("budget", self.config.get("question_budget", 0)) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def set_budget(self, per_hour: int) -> int:
+        self._set("budget", max(0, min(60, int(per_hour))))
+        return self.budget()
+
+    def _budget_spent(self) -> int:
+        cutoff = self.now() - timedelta(hours=1)
+        return sum(1 for stamp in self._get("ask_log", []) if datetime.fromisoformat(stamp) > cutoff)
+
+    def _budget_note(self) -> None:
+        self._set("ask_log", (self._get("ask_log", []) + [self.now().isoformat()])[-60:])
 
     # ----- parking ---------------------------------------------------------------------------
 
@@ -386,6 +466,14 @@ class Syrinx:
                                          source="parked")
         return None
 
+    def _score_default(self, default: Any, answer: Any) -> None:
+        """Count whether the user kept the default the agent had taken. This is the agent's hit rate."""
+        one, two = str(default or "").strip().lower(), str(answer or "").strip().lower()
+        strip = lambda text: re.sub(r"\s*\(recommended\)\s*", "", text).strip()
+        one, two = strip(one), strip(two)
+        kept = bool(one) and (one == two or one in two or two in one or question_similarity(one, two) >= 0.8)
+        self._bump("defaults_kept" if kept else "defaults_changed")
+
     def note_answer(self, question: Any, answer: Any) -> Optional[dict[str, Any]]:
         """Remember what the user answered. The second time the same question gets the same answer,
         Syrinx offers to make it a standing answer. Returns the new suggestion, if this made one."""
@@ -399,6 +487,7 @@ class Syrinx:
                 if item.get("status") == "handed_back" and question_similarity(question, item.get("question")) >= self.MATCH:
                     item["status"], item["answer"], item["delivered"] = "answered", answer, True
                     item["answered"] = self.now().isoformat()
+                    self._score_default(item.get("default", ""), answer)
             self._set("parked", parked)
 
             history = self._get("answer_history", [])
@@ -449,6 +538,7 @@ class Syrinx:
                 if item.get("id") == item_id and item.get("status") in ("parked", "handed_back"):
                     item["status"] = "answered"
                     item["answer"] = str(text or "").strip()[:500]
+                    self._score_default(item.get("default", ""), item["answer"])
                     item["answered"] = self.now().isoformat()
                     item["delivered"] = False
                     self._set("parked", parked)
@@ -487,6 +577,7 @@ class Syrinx:
                 "remaining_minutes": self.focus_remaining_minutes(),
                 "elapsed_minutes": self.focus_elapsed_minutes(),
                 "last_minutes": focus.get("last_minutes"),
+                "source": focus.get("source") if focus.get("active") else None,
             },
             "night": {
                 "enabled": bool(self.config.get("night_enabled", True)),
@@ -498,6 +589,8 @@ class Syrinx:
             },
             "parked": self.parked_open(),
             "handed_back": len(self.handed_back_open()),
+            "windows": self.windows(),
+            "budget": self.budget(),
             "standing": self.standing(),
             "suggested": self.suggested(),
             "stats": self.stats(),
@@ -566,7 +659,17 @@ class Syrinx:
         if in_focus and open_questions and self.consume_clarify_pass(session_id):
             self._bump("interruptions_urgent")
             in_focus = False
-        if not settled and not in_focus:
+        over_budget = False
+        if not in_focus and open_questions:
+            limit = self.budget()
+            if limit and self._budget_spent() >= limit:
+                if self.consume_clarify_pass(session_id):
+                    self._bump("interruptions_urgent")
+                else:
+                    over_budget = True
+            if not over_budget and not settled:
+                self._budget_note()        # this card is going to reach the user
+        if not settled and not in_focus and not over_budget:
             return None
 
         lines: list[str] = []
@@ -598,6 +701,18 @@ class Syrinx:
                 "Park anything else with syrinx_park(question, default, why). Only if the task truly cannot "
                 "move without an answer, call syrinx_interrupt(question, why) and then ask with clarify."
             )
+        elif open_questions and over_budget:
+            items = self.park_questions([q for q, _ in open_questions], session_id=session_id)
+            self._set("budget_return", True)
+            self._bump("questions_budgeted", len(items))
+            lines.append(
+                f"Syrinx: the user allows {self.budget()} question cards an hour and that is used up, so this was "
+                "parked, not shown. It will be handed back with their next message."
+            )
+            for item in items:
+                lines.append(f"- {item['id']}: \"{item['question']}\" parked. Default to use now: {item['default']}.")
+            lines.append("Continue with those defaults and say which ones you took. If the task truly cannot move, "
+                         "call syrinx_interrupt(question, why) and then ask with clarify.")
         elif open_questions:
             lines.append("Ask only the remaining questions, in one clarify call:")
             lines += [f"- {q['question']}" for q, _ in open_questions]
@@ -813,6 +928,17 @@ class Syrinx:
         for item in items:
             created = datetime.fromisoformat(item["created"])
             lines.append(f"- ({fmt_clock(created)}) {item['text']}")
+        if not late:
+            yesterday = (self.now().date() - timedelta(days=1)).isoformat()
+            row = self._get("stats", {}).get("days", {}).get(yesterday, {})
+            kept, parked = int(row.get("focus_minutes", 0)), int(row.get("questions_parked", 0))
+            if kept or parked:
+                lines.append(f"Also tell them in one short line: yesterday Syrinx kept {fmt_minutes(kept)} of focus "
+                             f"and parked {parked} question{'s' if parked != 1 else ''}.")
+            waiting = len(self.parked_open())
+            if waiting:
+                lines.append(f"{waiting} parked question{'s are' if waiting != 1 else ' is'} still waiting; "
+                             "mention /catchup.")
         return "\n".join(lines)
 
     # ----- status and stats ------------------------------------------------------------------
@@ -848,6 +974,9 @@ class Syrinx:
         lines.append(f"Focus kept: {fmt_minutes(minutes)} across {blocks} block{'s' if blocks != 1 else ''}.")
         lines.append(f"Questions parked: {parked}, handed back in batches: {batched}, urgent interruptions: {urgent}.")
         lines.append(f"Late-night requests queued for the morning: {queued}.")
+        kept, changed = int(stats.get("defaults_kept", 0)), int(stats.get("defaults_changed", 0))
+        if kept + changed:
+            lines.append(f"Defaults you kept: {kept} of {kept + changed}. That is how often the agent guessed right.")
         auto = int(stats.get("questions_auto_answered", 0))
         if auto:
             lines.append(f"Questions you never had to answer again: {auto}.")
