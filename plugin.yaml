@@ -1,12 +1,12 @@
 name: syrinx
-version: 0.1.0
+version: 1.0.0
 manifest_version: 2
 api_version: 1
-description: "Your agent is fast. Syrinx makes it wait for the right moment: it parks non-urgent questions while you are heads-down, hands them back in one pass with a catch-up when you return, queues late-night work into a morning brief, and keeps a receipt of the time it gave back."
+description: "Your agent is fast. Syrinx makes it wait for the right moment: it parks questions with the default taken while you are heads-down, hands them back in one card with a report counted by code, never asks a settled question again, and turns late-night requests into a morning brief."
 author: cstljuan
 license: MIT
 homepage: https://github.com/cstljuan/kairos
-tags: [focus, attention, interruptions, catch-up, curfew, wellbeing]
+tags: [focus, attention, interruptions, clarify, standing-answers, catch-up, trust, pet]
 requires_hermes: ">=0.23.0"
 provides_tools:
   - syrinx_park

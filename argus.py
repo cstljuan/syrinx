@@ -46,12 +46,12 @@ def pose_for(snapshot: dict[str, Any]) -> dict[str, str]:
         if parked:
             return {"pose": "guard", "line": f"Argus is keeping {parked} {questions} for you."}
         return {"pose": "shush", "line": "Every eye is shut. Nothing gets through."}
-    if night.get("late_active") and not parked:
-        return {"pose": "yawn", "line": "Up late. Argus is keeping you company."}
     if parked:
         return {"pose": "letter", "line": f"{parked} {questions} waiting. Say /catchup."}
     handed = int(snapshot.get("handed_back") or 0)
     if handed:
         word = "question is" if handed == 1 else "questions are"
         return {"pose": "waiting", "line": f"Your {handed} {word} on the card. Argus is listening."}
+    if night.get("late_active"):
+        return {"pose": "yawn", "line": "Up late. Argus is keeping you company."}
     return {"pose": "idle", "line": "Argus is watching. Start a flow and he will hold the questions."}
