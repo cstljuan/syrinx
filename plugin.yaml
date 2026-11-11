@@ -1,5 +1,5 @@
 name: syrinx
-version: 1.0.0
+version: 1.1.0
 manifest_version: 2
 api_version: 1
 description: "Your agent is fast. Syrinx makes it wait for the right moment: it parks questions with the default taken while you are heads-down, hands them back in one card with a report counted by code, never asks a settled question again, and turns late-night requests into a morning brief."
@@ -45,6 +45,10 @@ config_schema:
     type: int
     default: 30
     description: "Length of an automatic focus block; it is extended while you stay in another app."
+  hold_outward:
+    type: bool
+    default: true
+    description: "During a focus block, stop anything that would leave this machine (git push, publish, send, deploy) before it runs, and offer it back on the return card. Local commands are never held."
   question_budget:
     type: int
     default: 0

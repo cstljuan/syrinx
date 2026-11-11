@@ -323,7 +323,7 @@ def test_morning_brief_carries_yesterday():
 
 
 def test_away_report_is_counted_and_flags_what_left_the_machine():
-    k, clock = make()
+    k, clock = make(hold_outward=False)        # hold off: outward actions run and are flagged
     k.start_focus(30)
     k.record_tool("s1", "read_file", {"path": "/x/app.py"})
     k.record_tool("s1", "write_file", {"path": "/x/app.py", "content": "secret"})
@@ -380,3 +380,22 @@ def test_classify_tool_calls():
     assert core.classify_tool_call("browser_click", {}) == ("web", "")
     assert core.classify_tool_call("delegate_task", {}) == ("delegate", "")
 
+
+
+def test_hold_labels_only_what_leaves_the_machine():
+    assert core.holdable("terminal", {"command": "git push"}) == "git push"
+    assert core.holdable("terminal", {"command": "npm publish --access public"}) == "package publish"
+    assert core.holdable("terminal", {"command": "gh pr create --fill"}) == "gh create"
+    assert core.holdable("send_message", {}) == "send_message"
+    for local in ({"command": "rm -rf node_modules"}, {"command": "git reset --hard HEAD~1"},
+                  {"command": "rsync -a src/ dst/"}, {"command": "git commit -m x"}, {"command": "pytest"}):
+        assert core.holdable("terminal", local) == ""
+    assert core.holdable("delete_file", {}) == "" and core.holdable("write_file", {}) == ""
+    k, clock = make()
+    assert k.hold_directive("terminal", {"command": "git push"}) is None          # no flow, nothing held
+    k.start_focus(20)
+    assert k.hold_directive("terminal", {"command": "git push"}, session_id="s1")["action"] == "block"
+    assert k.snapshot()["held"] == [{"label": "git push", "tries": 1}] and k.snapshot()["hold"] is True
+    clock.advance(minutes=21)
+    assert k.take_pending_return() and "Run git push now?" in k.return_context("s1")
+    assert k.snapshot()["held"] == []

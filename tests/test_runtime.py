@@ -319,7 +319,7 @@ def test_demo_runs_the_real_rules_without_touching_state(rt):
     r, ctx, _ = rt
     before = dict(ctx.state.data)
     text = ctx.commands["syrinx"]("demo")
-    assert "use: pnpm" in text and "Left your machine or cannot be undone (1): git push" in text
+    assert "use: pnpm" in text and "Held for you, did not run (1): git push." in text and "Nothing left your machine." in text
     assert "Built on 1 unconfirmed default" in text and "queued this for the morning brief" in text
     assert "Syrinx receipt" in text and "Questions you never had to answer again: 1." in text
     assert ctx.state.data == before
@@ -344,3 +344,46 @@ def test_commands_text(rt):
     assert "No focus block" in ctx.commands["flow"]("off", session_id="s1")
     assert "Syrinx receipt" in ctx.commands["syrinx"]("receipt")
     assert "No questions were parked" in ctx.commands["catchup"]("", session_id="s1")
+
+
+def test_hold_stops_a_push_during_a_flow_and_offers_it_back_on_the_card(rt):
+    r, ctx, clock = rt
+    pre, post, llm = ctx.hooks["pre_tool_call"], ctx.hooks["post_tool_call"], ctx.hooks["pre_llm_call"]
+    push = {"command": "git add -A && git push origin main"}
+    assert pre(tool_name="terminal", args=push, session_id="s1") is None      # no flow: it runs
+    ctx.commands["flow"]("30", session_id="s1")
+    note = llm(session_id="s1", user_message="ship it")["context"]
+    assert "call it once as you normally would" in note and "Syrinx will hold it" in note
+    assert pre(tool_name="terminal", args={"command": "pytest -q"}, session_id="s1") is None
+    assert pre(tool_name="terminal", args={"command": "rm -rf build"}, session_id="s1") is None   # local: never held
+    verdict = pre(tool_name="terminal", args=push, session_id="s1")
+    assert verdict["action"] == "block" and "git push" in verdict["message"] and "did not run" in verdict["message"]
+    assert "origin main" not in json.dumps(ctx.state.data)                    # the label is stored, never the command
+    post(tool_name="terminal", args=push, result="blocked", session_id="s1")   # even if Hermes reports the blocked call
+    pre(tool_name="terminal", args=push, session_id="s1")                      # a retry is the same held action
+    assert [item["tries"] for item in r.k.held_open()] == [2]
+    assert "1 held" in r.k.status_line()
+    assert r.k.away_report("s1")[0] == "Held for you, did not run (1): git push."
+    assert "Nothing left your machine." in r.k.away_report("s1")
+    clock["t"] = datetime.fromisoformat("2026-11-10 15:31")
+    back = llm(session_id="s1", user_message="I'm back")["context"]
+    assert "HELD 1 action" in back and "Run git push now?" in back and "ONE clarify call" in back
+    assert r.k.held_open() == []
+    assert pre(tool_name="terminal", args=push, session_id="s1") is None      # the flow is over: it runs
+    post(tool_name="terminal", args=push, result="ok", session_id="s1")
+    assert any(row.get("flag") == "git push" for row in r.k.trace_rows("s1"))
+    assert "held until you were back: 1" in ctx.commands["syrinx"]("receipt")
+
+
+def test_hold_can_be_turned_off_and_never_touches_unattended_runs(rt):
+    r, ctx, _ = rt
+    pre = ctx.hooks["pre_tool_call"]
+    ctx.commands["flow"]("30", session_id="s1")
+    ctx.cron = object()
+    assert pre(tool_name="send_message", args={"text": "hi"}, session_id="s1") is None
+    ctx.cron = None
+    assert pre(tool_name="send_message", args={"text": "hi"}, session_id="s1")["action"] == "block"
+    assert pre(tool_name="delete_file", args={"path": "x"}, session_id="s1") is None
+    assert "Hold off" in ctx.commands["syrinx"]("hold off")
+    assert pre(tool_name="terminal", args={"command": "npm publish"}, session_id="s1") is None
+    assert "Hold on" in ctx.commands["syrinx"]("hold on") and "send_message" in ctx.commands["syrinx"]("hold")

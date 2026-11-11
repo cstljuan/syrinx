@@ -24,6 +24,7 @@ LATE_MAX_MINUTES = 90
 TRACE_MAX = 200
 PARKED_MAX = 40
 QUEUE_MAX = 40
+HELD_MAX = 40
 SUMMARY_MAX_CHARS = 80
 
 
@@ -169,6 +170,9 @@ _OUTWARD_COMMANDS = (
     (r"\bkubectl\s+(apply|delete)\b", "kubectl change"), (r"\b(terraform|pulumi)\s+(apply|destroy|up)\b", "infrastructure change"),
     (r"\bdrop\s+(table|database)\b", "drop table"),
 )
+# Flagged in the report but never held: they stay on this machine, and agents use them all day.
+_NEVER_HELD = frozenset({"rm -r", "git reset --hard", "copy to another machine"})
+_NEVER_HELD_TOOLS = re.compile(r"(delete|remove)", re.I)
 _OUTWARD_TOOLS = re.compile(r"(send|post|publish|email|tweet|deploy|upload|pay|purchase|checkout|delete|remove|transfer)", re.I)
 _WRITE_TOOLS = re.compile(r"(write|patch|edit|create_file|str_replace|apply_diff|notebook)", re.I)
 _READ_TOOLS = re.compile(r"(read|search|list|grep|glob|find|view|cat)", re.I)
@@ -197,6 +201,17 @@ def classify_tool_call(tool_name: str, args: Any) -> tuple[str, str]:
     if _READ_TOOLS.search(name):
         return "read", ""
     return "other", ""
+
+
+def holdable(tool_name: str, args: Any) -> str:
+    """The fixed label of an action that would leave this machine (push, publish, send, deploy), or
+    ``""``. This is what a focus block holds until the person is back."""
+    kind, flag = classify_tool_call(tool_name, args)
+    if kind != "outward" or not flag or flag in _NEVER_HELD:
+        return ""
+    if flag == str(tool_name or "")[:40] and _NEVER_HELD_TOOLS.search(flag):
+        return ""
+    return flag
 
 
 class Syrinx:
@@ -644,6 +659,8 @@ class Syrinx:
             },
             "parked": self.parked_open(),
             "handed_back": len(self.handed_back_open()),
+            "held": [{"label": item["label"], "tries": int(item.get("tries", 1))} for item in self.held_open()],
+            "hold": self.hold_enabled(),
             "away": self.away_for_pane(),
             "debt": self.assumption_debt("*"),
             "windows": self.windows(),
@@ -777,6 +794,70 @@ class Syrinx:
             lines.append("Continue the task with those answers.")
         return {"action": "block", "message": "\n".join(lines)}
 
+    # ----- hold ------------------------------------------------------------------------------
+    # During a focus block nothing leaves the machine. A push, publish, send or deploy is stopped
+    # before it runs, remembered by its label only, and offered back on the same card as the questions.
+
+    def hold_enabled(self) -> bool:
+        value = self._get("hold", "")          # "on" / "off" once set by hand; settings decide until then
+        return bool(self.config.get("hold_outward", True)) if value not in ("on", "off") else value == "on"
+
+    def set_hold(self, on: bool) -> bool:
+        self._set("hold", "on" if on else "off")
+        return bool(on)
+
+    def held_open(self) -> list[dict[str, Any]]:
+        return [item for item in self._get("held", []) if item.get("status") == "held"]
+
+    def _would_hold(self, tool_name: str, args: Any) -> str:
+        if not self.hold_enabled() or not self.focus().get("active"):
+            return ""
+        return holdable(tool_name, args)
+
+    def hold_directive(self, tool_name: str, args: Any, *, session_id: str = "") -> Optional[dict[str, Any]]:
+        """What ``pre_tool_call`` returns for any tool but ``clarify``. ``None`` lets it run."""
+        label = self._would_hold(tool_name, args)
+        if not label:
+            return None
+        with self._lock:
+            held = self._get("held", [])
+            same = next((item for item in held if item.get("status") == "held" and item.get("label") == label
+                         and item.get("session") == (session_id or "*")), None)
+            if same:
+                same["tries"] = int(same.get("tries", 1)) + 1
+            else:
+                held.append({"id": _new_id("h"), "label": label, "t": self.now().isoformat(),
+                             "session": session_id or "*", "status": "held", "tries": 1})
+                self._bump("actions_held")
+            self._set("held", held[-HELD_MAX:])
+        until = datetime.fromisoformat(self.focus()["until"])
+        return {"action": "block", "message": (
+            f"Syrinx held this action ({label}). It did not run. The user is in a focus block until {fmt_clock(until)}, "
+            "and nothing that leaves this machine runs while they are away. Do not retry it and do not reach the same "
+            "result another way. If the same command also did other things, run those again without this part. "
+            "Finish everything else, and say in your reply that this is waiting for them. "
+            "Syrinx will offer it back on their return card."
+        )}
+
+    def offer_held(self) -> list[dict[str, Any]]:
+        """Mark every held action as offered back to the person and return them."""
+        with self._lock:
+            held = self._get("held", [])
+            offered = []
+            for item in held:
+                if item.get("status") == "held":
+                    item["status"] = "offered"
+                    offered.append(dict(item))
+            self._set("held", held)
+            return offered
+
+    def _held_in_block(self, session_id: str) -> list[dict[str, Any]]:
+        focus = self._get("focus", {})
+        since = focus.get("started") if focus.get("active") else focus.get("last_started")
+        return [item for item in self._get("held", [])
+                if (not since or str(item.get("t", "")) >= since)
+                and (session_id in ("", "*") or item.get("session") in (session_id, "*"))]
+
     # ----- night -----------------------------------------------------------------------------
 
     def night(self) -> dict[str, Any]:
@@ -886,6 +967,8 @@ class Syrinx:
     def record_tool(self, session_id: str, tool_name: str, args: Any, *, duration_ms: int = 0) -> None:
         with self._lock:
             trace = self._get("trace", {})
+            if self._would_hold(tool_name, args):
+                return                     # held before it ran: nothing to count
             rows = trace.setdefault(session_id or "*", [])
             kind, flag = classify_tool_call(tool_name, args)
             row = {"t": self.now().isoformat(), "what": summarize_tool_call(tool_name, args),
@@ -928,7 +1011,8 @@ class Syrinx:
         """What happened during the block, counted by code from the tool calls themselves. No model
         wrote any of it, so it cannot be flattering. Lines, most important first."""
         rows = self._block_rows(session_id)
-        if not rows:
+        held = self._held_in_block(session_id)
+        if not rows and not held:
             return []
         by_kind: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
@@ -944,6 +1028,12 @@ class Syrinx:
             return ", ".join(seen[:limit]) + extra
 
         lines: list[str] = []
+        if held:
+            labels: list[str] = []
+            for item in held:
+                if item["label"] not in labels:
+                    labels.append(item["label"])
+            lines.append(f"Held for you, did not run ({len(held)}): {', '.join(labels)}.")
         outward = by_kind.get("outward", [])
         if outward:
             flags: list[str] = []
@@ -976,7 +1066,7 @@ class Syrinx:
         """The report for the pane: only while a block runs, while its questions are waiting, or for
         an hour after it ended. Otherwise it is old news."""
         focus = self._get("focus", {})
-        if focus.get("active") or self.parked_open() or self.handed_back_open():
+        if focus.get("active") or self.parked_open() or self.handed_back_open() or self.held_open():
             return self.away_report("*")
         ended = focus.get("ended")
         if ended and (self.now() - datetime.fromisoformat(ended)).total_seconds() < 3600:
@@ -1059,8 +1149,20 @@ class Syrinx:
             )
             for item in handed:
                 lines.append(f"- {item['id']}: {item['question']} (default used: {item['default']})")
-        else:
+        held = self.offer_held()
+        if held:
+            labels = ", ".join(dict.fromkeys(item["label"] for item in held))
+            where = "Put one more question per held action on the SAME card" if handed else \
+                "Ask about them in ONE clarify call, one question per held action"
+            lines.append(
+                f"Syrinx also HELD {len(held)} action{'s' if len(held) != 1 else ''} that would have left this machine, "
+                f"and none of them ran: {labels}. {where} (\"Run {held[0]['label']} now?\", choices: Run it now, Leave it). "
+                "Run only the ones they approve, and only after they answer."
+            )
+        if not handed and not held:
             lines.append("No questions were parked. Say so in one line.")
+        elif not handed:
+            lines.append("No questions were parked.")
         return "\n".join(lines)
 
     def morning_context(self, items: list[dict[str, Any]], *, late: bool = False) -> str:
@@ -1105,6 +1207,9 @@ class Syrinx:
             line = "Syrinx · open"
         if parked:
             line += f" · {parked} parked"
+        held = len(self.held_open())
+        if held:
+            line += f" · {held} held"
         return line
 
     def stats(self) -> dict[str, Any]:
@@ -1130,6 +1235,9 @@ class Syrinx:
         auto = int(stats.get("questions_auto_answered", 0))
         if auto:
             lines.append(f"Questions you never had to answer again: {auto}.")
+        held = int(stats.get("actions_held", 0))
+        if held:
+            lines.append(f"Pushes, sends and deploys held until you were back: {held}.")
         necessary = int(stats.get("interruptions_necessary", 0))
         if necessary:
             lines.append(f"Approvals that still reached you during focus: {necessary}.")

@@ -43,3 +43,11 @@ def test_unknown_or_hostile_names_never_read_a_file():
     assert argus.pose_data_uri("nope") is None
     assert argus.pose_data_uri("../card-plate") is None
     assert argus.pose_data_uri("../../plugin.yaml") is None
+
+
+def test_argus_guards_the_door_when_an_action_is_held():
+    held = dict(snap(flow=True, parked=1), held=[{"label": "git push", "tries": 1}])
+    pose = argus.pose_for(held)
+    assert pose["pose"] == "guard" and "stopped one thing at the door, and 1 question" in pose["line"]
+    after = dict(snap(), held=[{"label": "git push", "tries": 1}])
+    assert argus.pose_for(after)["pose"] == "letter" and "1 held action waiting" in argus.pose_for(after)["line"]

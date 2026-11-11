@@ -338,8 +338,10 @@ function Away({ data }) {
   return jsx(Section, {
     title: 'Counted while you were away',
     children: lines.map((line, i) => jsx('div', {
-      className: /^Left your machine/.test(line) ? 'text-xs' : 'text-xs text-(--ui-text-tertiary)',
-      style: /^Left your machine/.test(line) ? { color: 'var(--ui-warning, #d9a441)' } : undefined,
+      className: /^(Left your machine|Held for you)/.test(line) ? 'text-xs' : 'text-xs text-(--ui-text-tertiary)',
+      style: /^Left your machine/.test(line)
+        ? { color: 'var(--ui-warning, #d9a441)' }
+        : /^Held for you/.test(line) ? { fontWeight: 600 } : undefined,
       children: line
     }, `a${i}`))
   })

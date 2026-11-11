@@ -37,6 +37,7 @@ HELP = (
     "/syrinx demo           the whole loop in ten seconds, no model needed\n"
     "/flow weekdays 09:00-11:00   deep-work hours: a flow that starts by itself\n"
     "/syrinx budget N       at most N question cards an hour outside a flow\n"
+    "/syrinx hold on|off    during a flow, hold pushes, sends and deploys until you are back (on by default)\n"
     "/syrinx auto on|off    auto-focus from presence (macOS)\n"
     "/syrinx night on|off   queue late-night requests, or not"
 )
@@ -91,7 +92,8 @@ class Runtime:
         self.ctx = ctx
         config = {}
         for key, default in (("cutoff", "22:30"), ("wake", "08:00"), ("focus_minutes", 45), ("night_enabled", True),
-                             ("auto_focus", False), ("auto_focus_minutes", 30), ("hermes_apps", "")):
+                             ("auto_focus", False), ("auto_focus_minutes", 30), ("hermes_apps", ""),
+                             ("question_budget", 0), ("hold_outward", True)):
             try:
                 config[key] = ctx.get_config(key, default=default)
             except Exception:
@@ -185,11 +187,17 @@ class Runtime:
     def pre_tool_call(self, tool_name: str = "", args: Optional[dict] = None, task_id: str = "",
                       session_id: str = "", **kwargs: Any) -> Optional[dict]:
         try:
-            if tool_name != "clarify":
+            if tool_name == "clarify":
+                directive = self.k.clarify_directive(args or {}, session_id=session_id or task_id)
+                if directive is not None:
+                    self._changed("parked")
+                return directive
+            if tool_name.startswith("syrinx_") or self._in_cron():
                 return None
-            directive = self.k.clarify_directive(args or {}, session_id=session_id or task_id)
+            # Hold: during a focus block nothing leaves the machine. Unattended runs are never held.
+            directive = self.k.hold_directive(tool_name, args or {}, session_id=session_id or task_id)
             if directive is not None:
-                self._changed("parked")
+                self._changed("held")
             return directive
         except Exception:
             logger.debug("syrinx: pre_tool_call failed open", exc_info=True)
@@ -277,6 +285,9 @@ class Runtime:
                     "until then. Do not ask them anything now: park questions with syrinx_park(question, default, why) "
                     "and continue with sensible defaults, saying which ones you took. Use syrinx_interrupt only if the "
                     "task cannot move at all."
+                    + (" If the task includes something that leaves this machine (push, publish, send, deploy), call it "
+                       "once as you normally would: Syrinx will hold it, record it, and offer it back on the user's return "
+                       "card. Do not skip it silently, and do not retry it once it is held." if self.k.hold_enabled() else "")
                 )
                 debt = self.k.assumption_debt(session_id)
                 if debt >= DEBT_LIMIT:
@@ -525,6 +536,17 @@ class Runtime:
             return (f"Question budget set: {value} an hour. Extra questions are parked and come back with your next message."
                     if value else "Question budget off.")
         parts = arg.split()
+        if parts and parts[0] == "hold" and (len(parts) == 1 or parts[1] in ("on", "off")):
+            if len(parts) == 2:
+                self.k.set_hold(parts[1] == "on")
+                self._changed("settings")
+            waiting = self.k.held_open()
+            state = ("Hold on: during a flow, anything that leaves this machine (push, publish, send, deploy) waits "
+                     "until you are back." if self.k.hold_enabled() else
+                     "Hold off: outward actions run during a flow and are only flagged in the report.")
+            if waiting:
+                state += " Waiting now: " + ", ".join(item["label"] for item in waiting) + "."
+            return state
         if len(parts) == 2 and parts[0] in ("auto", "night") and parts[1] in ("on", "off"):
             key = "auto_focus" if parts[0] == "auto" else "night_enabled"
             value = parts[1] == "on"
@@ -560,9 +582,12 @@ def demo_text() -> str:
     out.append("09:07  The agent tries to ask two questions. Syrinx answers:")
     out += ["         " + line for line in verdict["message"].splitlines()[:6]]
     for name, args in (("write_file", {"path": "api.py"}), ("terminal", {"command": "pytest -q"}),
-                       ("write_file", {"path": "test_api.py"}), ("terminal", {"command": "git push origin main"})):
+                       ("write_file", {"path": "test_api.py"})):
         clock["t"] += core.timedelta(minutes=6)
         k.record_tool("demo", name, args)
+    clock["t"] += core.timedelta(minutes=6)
+    k.hold_directive("terminal", {"command": "git push origin main"}, session_id="demo")
+    out += ["", "09:31  The agent tries git push. Syrinx holds it: nothing leaves your machine while you are away."]
     clock["t"] = core.datetime(2026, 1, 5, 9, 46)
     k.focus()
     out += ["", "09:46  The block ends. " + k.status_line(), "       What the agent is told to show you, counted by code:"]
@@ -570,7 +595,7 @@ def demo_text() -> str:
     k.take_pending_return()
     k.return_context("demo")
     k.note_answer("Keep the old API route?", "Remove it")
-    out += ["", "09:47  You answer the one card: Remove it. The agent redoes that piece."]
+    out += ["", "09:47  You answer the one card: Remove it, and yes, push now. The agent redoes that piece, then pushes."]
     clock["t"] = core.datetime(2026, 1, 5, 23, 10)
     out += ["", "23:10  You send one more idea. " + k.night_block_message()]
     k.queue_for_morning("refactor the auth module", session_id="demo")

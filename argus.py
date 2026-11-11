@@ -42,12 +42,20 @@ def pose_for(snapshot: dict[str, Any]) -> dict[str, str]:
     questions = "question" if parked == 1 else "questions"
     if night.get("is_night"):
         return {"pose": "sleep", "line": "Argus sleeps until morning."}
+    held = len(snapshot.get("held") or [])
     if focus.get("active"):
+        if held:
+            what = "one thing" if held == 1 else f"{held} things"
+            extra = f", and {parked} {questions}" if parked else ""
+            return {"pose": "guard", "line": f"Argus stopped {what} at the door{extra}."}
         if parked:
             return {"pose": "guard", "line": f"Argus is keeping {parked} {questions} for you."}
         return {"pose": "shush", "line": "Every eye is shut. Nothing gets through."}
-    if parked:
-        return {"pose": "letter", "line": f"{parked} {questions} waiting. Say /catchup."}
+    if parked or held:
+        waiting = f"{parked} {questions}" if parked else ""
+        if held:
+            waiting += (" and " if waiting else "") + f"{held} held action{'s' if held != 1 else ''}"
+        return {"pose": "letter", "line": f"{waiting} waiting. Say /catchup."}
     handed = int(snapshot.get("handed_back") or 0)
     if handed:
         word = "question is" if handed == 1 else "questions are"

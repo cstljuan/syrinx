@@ -18,11 +18,15 @@ DESCRIPTION = (
     "Your agent is fast; Syrinx makes it wait for the right moment. In a focus block (/flow 45) the agent's "
     "questions are parked with the default it took and it keeps working; when you return you get a catch-up, "
     "a list counted by code from the tool calls (files changed, commands run, anything that left your machine, "
-    "and how much work rests on unconfirmed defaults), and every question in one card. Settle a question once "
+    "and how much work rests on unconfirmed defaults), and every question in one card. During the block anything that would leave your machine (git push, "
+    "publish, send, deploy) is held before it runs and offered back on that card. Settle a question once "
     "with /always and it is never asked again. Late-night requests become a morning brief. Deep-work hours, a "
     "question budget, a time receipt, a Desktop pane and Argus, a pet whose pose shows the state. "
     "Disclosure: pre_tool_call can block the built-in clarify tool (during a focus block, over the question "
-    "budget you set, or when a standing answer covers it) and tells the agent which default to use; "
+    "budget you set, or when a standing answer covers it) and tells the agent which default to use, and "
+    "during a focus block only it blocks tool calls that match a fixed list of outward actions (push, publish, "
+    "gh create, curl with a body, ssh, docker push, kubectl, terraform, send/post/deploy/upload/pay tools), "
+    "storing a label, never the command; hold_outward: false turns that off; "
     "pre_llm_call appends short blocks to your message (standing answers, focus notes, the hand-back, the "
     "morning brief) and, after your cutoff only, ends the turn to queue the request; post_tool_call stores tool "
     "names, file basenames and program names, never arguments, plus your answers to clarify cards; with "
@@ -38,7 +42,7 @@ def main() -> None:
     version = next(line.split(":", 1)[1].strip().strip('"') for line in (ROOT / "plugin.yaml").read_text().splitlines()
                    if line.startswith("version:"))
     raw = repo.replace("https://github.com/", "https://raw.githubusercontent.com/") + f"/{sha}"
-    shots = ["flow-parked.jpg", "return-card.jpg", "receipt-card.jpg", "argus-poses.jpg"]
+    shots = ["flow-parked.jpg", "hold-return.jpg", "return-card.jpg", "receipt-card.jpg", "argus-poses.jpg"]
     lines = [
         "name: syrinx",
         "title: Syrinx",
