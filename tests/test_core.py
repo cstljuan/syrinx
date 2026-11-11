@@ -130,7 +130,7 @@ def test_trace_keeps_no_arguments_only_safe_summaries():
     k.record_tool("s1", "terminal", {"command": "export TOKEN=abc && curl https://x"}, duration_ms=10)
     k.record_tool("s1", "write_file", {"path": "/Users/me/secret-project/app.py", "content": "x"})
     rows = k.trace_rows("s1")
-    assert rows[0]["what"] == "terminal export"
+    assert rows[0]["what"] == "terminal export curl"
     assert rows[1]["what"] == "write_file app.py"
     text = k.catchup_text("s1")
     assert "abc" not in text and "secret-project" not in text
@@ -347,6 +347,14 @@ def test_away_report_is_counted_and_flags_what_left_the_machine():
     assert "abc123" not in text and "secret" not in text and "/x/" not in text
     # The pane sees every session; the return context tells the agent to show the list as written.
     assert k.snapshot()["away"] == k.away_report("*") and k.snapshot()["debt"] == 2
+    stale, stale_clock = make()
+    stale.start_focus(5)
+    stale.record_tool("s1", "write_file", {"path": "a.py"})
+    stale_clock.advance(minutes=6)
+    stale.focus()
+    assert stale.snapshot()["away"]                       # fresh: shown
+    stale_clock.advance(hours=2)
+    assert stale.snapshot()["away"] == []                 # two hours later: old news
     clock.advance(minutes=31)
     assert k.take_pending_return()
     context = k.return_context("s1")
@@ -354,6 +362,13 @@ def test_away_report_is_counted_and_flags_what_left_the_machine():
     # Another block starts clean.
     k.start_focus(30)
     assert k.away_report("s1") == []
+
+
+def test_command_programs_lists_names_only_and_skips_heredoc_bodies():
+    command = "mkdir -p /tmp/x && cat > /tmp/x/greet.py <<'EOF'\nimport os\nprint(os.environ['SECRET'])\nEOF\nTOKEN=abc python3 /tmp/x/greet.py | tee out.log"
+    assert core.command_programs(command) == ["mkdir", "cat", "python3", "tee"]
+    assert core.summarize_tool_call("terminal", {"command": command}) == "terminal mkdir cat python3 tee"
+    assert core.command_programs("") == [] and core.command_programs("sudo rm -rf x; ls") == ["rm", "ls"]
 
 
 def test_classify_tool_calls():

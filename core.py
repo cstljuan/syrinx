@@ -125,6 +125,23 @@ def clarify_questions(args: Any) -> list[dict[str, Any]]:
     return out
 
 
+def command_programs(command: str, limit: int = 4) -> list[str]:
+    """The program names a shell command runs (``mkdir``, ``python3``), in order, without arguments.
+    Heredoc bodies are dropped first, so file contents never count as commands."""
+    command = re.sub(r"<<-?\s*['\"]?(\w+)['\"]?.*?\n\1\b", " ", command, flags=re.S)
+    programs: list[str] = []
+    for segment in re.split(r"&&|\|\||[;|\n]", command):
+        words = segment.strip().split()
+        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in ("sudo", "time", "nohup", "env")):
+            words = words[1:]
+        if not words:
+            continue
+        program = os.path.basename(words[0])[:24]
+        if re.match(r"^[A-Za-z0-9_.+-]+$", program) and program not in programs:
+            programs.append(program)
+    return programs[:limit]
+
+
 def summarize_tool_call(tool_name: str, args: Any) -> str:
     """One short, safe line about a tool call. Never the full arguments: a command line or a
     message body can carry something private. Paths keep only their last component."""
@@ -134,9 +151,8 @@ def summarize_tool_call(tool_name: str, args: Any) -> str:
     if isinstance(path, str) and path.strip():
         return f"{name} {os.path.basename(path.rstrip('/'))[:SUMMARY_MAX_CHARS]}"
     if name == "terminal":
-        command = str(args.get("command") or "").strip()
-        head = command.split()[0] if command else ""
-        return f"terminal {os.path.basename(head)[:40]}".strip()
+        programs = command_programs(str(args.get("command") or ""))
+        return f"terminal {' '.join(programs)}".strip()
     if name in ("web_search", "web_fetch", "web_extract"):
         query = str(args.get("query") or args.get("url") or "").strip()
         return f"{name} {query[:SUMMARY_MAX_CHARS]}".strip()
@@ -628,7 +644,7 @@ class Syrinx:
             },
             "parked": self.parked_open(),
             "handed_back": len(self.handed_back_open()),
-            "away": self.away_report("*"),
+            "away": self.away_for_pane(),
             "debt": self.assumption_debt("*"),
             "windows": self.windows(),
             "budget": self.budget(),
@@ -955,6 +971,17 @@ class Syrinx:
             lines.append(f"Built on {waiting} unconfirmed default{'s' if waiting != 1 else ''}: {debt} step{'s' if debt != 1 else ''}. "
                          "Changing an answer may mean redoing them.")
         return lines
+
+    def away_for_pane(self) -> list[str]:
+        """The report for the pane: only while a block runs, while its questions are waiting, or for
+        an hour after it ended. Otherwise it is old news."""
+        focus = self._get("focus", {})
+        if focus.get("active") or self.parked_open() or self.handed_back_open():
+            return self.away_report("*")
+        ended = focus.get("ended")
+        if ended and (self.now() - datetime.fromisoformat(ended)).total_seconds() < 3600:
+            return self.away_report("*")
+        return []
 
     def assumption_debt(self, session_id: str) -> int:
         """How many changing steps (edits, commands, outward actions) were taken after the first
