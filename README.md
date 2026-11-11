@@ -80,7 +80,7 @@ He is also a full Hermes pet. `/syrinx pet` adds him and `/pet argus` adopts him
 ## Install
 
 ```bash
-hermes plugins install cstljuan/kairos
+hermes plugins install cstljuan/syrinx
 ```
 
 Then turn on its Desktop half under Capabilities, Plugins, Syrinx, if you use the Desktop app.

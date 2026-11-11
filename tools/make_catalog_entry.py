@@ -33,7 +33,7 @@ DESCRIPTION = (
 
 
 def main() -> None:
-    repo = sys.argv[1] if len(sys.argv) > 1 else "https://github.com/cstljuan/kairos"
+    repo = sys.argv[1] if len(sys.argv) > 1 else "https://github.com/cstljuan/syrinx"
     sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     version = next(line.split(":", 1)[1].strip().strip('"') for line in (ROOT / "plugin.yaml").read_text().splitlines()
                    if line.startswith("version:"))

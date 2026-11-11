@@ -21,7 +21,7 @@ Everything below was run live in Hermes Desktop with the plugin installed. Recor
 | 52 to 64 s | On a parked question press **Always**, or type `/always tabs or spaces = spaces`. Open a new session and ask for a JS project setup. | NEVER ASK AGAIN fills in. The new session uses pnpm without asking. | "Answer once. Never asked again." |
 | 64 to 74 s | Type `/night 00:00 08:00` earlier so it is past the cutoff, then send any request. | "Syrinx queued this for the morning brief at 8:00 AM. Sleep well." Argus is asleep under a moon. | "After your cutoff, ideas wait for the morning." |
 | 74 to 84 s | Type `/syrinx card`, open the saved card. Then show the pet walking in the corner. | The cyanotype receipt card. Argus walking, then holding out the letter. | "The time it gave back." |
-| 84 to 90 s | End card on the hero print. | `hermes plugins install cstljuan/kairos` | "Syrinx. Hermes played the pipe, and every eye closed." |
+| 84 to 90 s | End card on the hero print. | `hermes plugins install cstljuan/syrinx` | "Syrinx. Hermes played the pipe, and every eye closed." |
 
 After the night shot, set the cutoff back: `/night 22:30 08:00`.
 
