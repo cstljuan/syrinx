@@ -88,7 +88,7 @@ def test_registration_matches_manifest(rt):
     assert set(ctx.tools) == {"syrinx_park", "syrinx_interrupt", "syrinx_status"}
     assert set(ctx.hooks) == {"pre_tool_call", "post_tool_call", "pre_llm_call", "post_llm_call",
                               "on_human_input_request", "on_human_input_resolved"}
-    assert set(ctx.commands) == {"flow", "catchup", "late", "night", "syrinx"}
+    assert set(ctx.commands) == {"flow", "catchup", "late", "night", "always", "syrinx"}
 
 
 def test_focus_flow_end_to_end(rt):
@@ -270,6 +270,31 @@ def test_syrinx_pet_goes_through_the_hermes_pet_store(rt, monkeypatch):
         assert calls[0][0][:4] == b"RIFF" and calls[0][1]["slug"] == "argus"
     else:
         assert "no pet art" in reply
+
+
+def test_always_command_and_learning_from_real_clarify_answers(rt):
+    r, ctx, _ = rt
+    assert "None yet" in ctx.commands["always"]("")
+    assert "Settled for good" in ctx.commands["always"]("tabs or spaces = spaces")
+    assert "Use /always" in ctx.commands["always"]("no equals sign")
+    blocked = ctx.hooks["pre_tool_call"](tool_name="clarify", args={"questions": [{"question": "Tabs or spaces?"}]},
+                                         task_id="s1", session_id="s1")
+    assert blocked["action"] == "block" and "use: spaces" in blocked["message"]
+    # A new session starts with the standing answers in context.
+    first = ctx.hooks["pre_llm_call"](session_id="s2", user_message="hi", is_first_turn=True, platform="cli")
+    assert "settled these questions for good" in first["context"] and "spaces" in first["context"]
+    # Two real clarify cards answered the same way make a suggestion.
+    card = {"questions": [{"question": "Which package manager?", "choices": ["npm", "pnpm"]}]}
+    result = json.dumps({"responses": [{"status": "answered", "user_response": "pnpm"}], "outcome": "submitted"})
+    for _ in range(2):
+        ctx.hooks["post_tool_call"](tool_name="clarify", args=card, result=result, task_id="s1")
+    assert "same answer twice" in ctx.commands["always"]("")
+    assert "pnpm" in ctx.commands["always"]("yes 1")
+    assert "Forgotten" in ctx.commands["always"]("forget 1")
+    # A cancelled card teaches nothing and never raises.
+    ctx.hooks["post_tool_call"](tool_name="clarify", args=card, result="not json", task_id="s1")
+    ctx.hooks["post_tool_call"](tool_name="clarify", args=card, task_id="s1",
+                                result=json.dumps({"responses": [{"status": "skipped", "user_response": None}]}))
 
 
 def test_commands_text(rt):

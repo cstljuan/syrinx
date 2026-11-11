@@ -202,3 +202,60 @@ def test_focus_restart_closes_previous_block():
     k.start_focus(30)
     assert k.stats()["blocks_ended"] == 1 and k.stats()["focus_minutes"] == 10
     assert k.focus()["active"]
+
+
+def test_standing_answer_stops_the_same_question_even_outside_focus():
+    k, _ = make()
+    made = k.add_standing("Tabs or spaces?", "spaces")
+    assert made and k.match_standing("Should I use tabs or spaces for indentation?")["answer"] == "spaces"
+    assert k.match_standing("Which database should I use?") is None
+    directive = k.clarify_directive({"questions": [{"question": "Do you want tabs or spaces?"}]}, session_id="s1")
+    assert directive["action"] == "block" and "use: spaces" in directive["message"]
+    assert k.stats()["questions_auto_answered"] == 1 and k.standing()[0]["uses"] == 1
+    assert "never had to answer again: 1" in k.receipt_text()
+    # The agent insists right away: the case must be different, so it goes through once.
+    assert k.clarify_directive({"questions": [{"question": "Do you want tabs or spaces?"}]}, session_id="s1") is None
+
+
+def test_standing_and_new_questions_in_one_card():
+    k, _ = make()
+    k.add_standing("Tabs or spaces?", "spaces")
+    args = {"questions": [{"question": "Tabs or spaces?"}, {"question": "Which port should the server use?"}]}
+    outside = k.clarify_directive(args, session_id="s1")
+    assert "use: spaces" in outside["message"] and "Ask only the remaining" in outside["message"]
+    assert "Which port" in outside["message"] and k.parked_open() == []
+    # In a focus block the settled one is answered and only the new one is parked.
+    k2, _ = make()
+    k2.add_standing("Tabs or spaces?", "spaces")
+    k2.start_focus(30)
+    inside = k2.clarify_directive(args, session_id="s1")
+    assert "use: spaces" in inside["message"] and len(k2.parked_open()) == 1
+    assert k2.parked_open()[0]["question"].startswith("Which port")
+
+
+def test_same_answer_twice_becomes_a_suggestion_then_a_rule():
+    k, _ = make()
+    assert k.note_answer("Which package manager?", "pnpm") is None
+    suggestion = k.note_answer("Which package manager should I use?", "pnpm")
+    assert suggestion and k.suggested()[0]["answer"] == "pnpm"
+    assert k.note_answer("Which package manager do you prefer?", "pnpm") is None      # offered once, not nagged
+    assert "same answer twice" in k.standing_text()
+    made = k.accept_suggestion("1")
+    assert made["answer"] == "pnpm" and k.suggested() == [] and k.standing()[0]["source"] == "learned"
+    assert "package manager" in k.standing_context()
+    assert k.forget_standing("1") and k.standing() == [] and k.standing_context() == ""
+
+
+def test_answer_in_chat_closes_a_handed_back_question_and_always_from_parked():
+    k, clock = make()
+    k.start_focus(10)
+    item = k.park("Keep the old API?", "yes", session_id="s1")
+    clock.advance(minutes=11)
+    k.take_pending_return()
+    k.return_context("s1")
+    assert len(k.handed_back_open()) == 1
+    k.note_answer("Keep the old API?", "no, remove it")
+    assert k.handed_back_open() == []
+    made = k.always_from_parked(item["id"])
+    assert made["answer"] == "no, remove it"
+

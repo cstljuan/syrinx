@@ -76,6 +76,55 @@ def fmt_minutes(minutes: int) -> str:
     return f"{hours} h {rest:02d} min" if rest else f"{hours} h"
 
 
+_FILLER = frozenset("""a an the to of for in on at or and do does did you your i me my we our us is are be it this that these
+those use using want wants would should could can will shall like prefer which what how please with as if so then than here there
+go ahead ok okay yes no not want need""".split())
+
+
+def question_tokens(text: Any) -> frozenset[str]:
+    """The meaningful words of a question, for comparing two questions without a model."""
+    words = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    return frozenset(word for word in words if len(word) > 1 and word not in _FILLER)
+
+
+def question_similarity(first: Any, second: Any) -> float:
+    """0 to 1. Shared words over all words, with credit when one question contains the other."""
+    one, two = question_tokens(first), question_tokens(second)
+    if not one or not two:
+        return 0.0
+    shared = len(one & two)
+    smaller = min(len(one), len(two))
+    contained = (shared / smaller) * 0.9 if smaller >= 2 else 0.0
+    return max(shared / len(one | two), contained)
+
+
+def clarify_questions(args: Any) -> list[dict[str, Any]]:
+    """The questions of a ``clarify`` call as ``{question, default}``. Hermes puts the recommended
+    choice first; an explicit "recommended" label wins if the agent wrote one."""
+    args = args if isinstance(args, dict) else {}
+    questions = args.get("questions")
+    if isinstance(questions, dict):
+        questions = [questions]
+    if not isinstance(questions, list):
+        return []
+    out = []
+    for raw in questions[:8]:
+        if isinstance(raw, str):
+            raw = {"question": raw}
+        if not isinstance(raw, dict):
+            continue
+        text = str(raw.get("question") or "").strip()
+        if not text:
+            continue
+        choices = raw.get("choices")
+        default = ""
+        if isinstance(choices, list) and choices:
+            marked = [c for c in choices if isinstance(c, str) and "recommended" in c.lower()]
+            default = str((marked or choices)[0])
+        out.append({"question": text, "default": default})
+    return out
+
+
 def summarize_tool_call(tool_name: str, args: Any) -> str:
     """One short, safe line about a tool call. Never the full arguments: a command line or a
     message body can carry something private. Paths keep only their last component."""
@@ -262,29 +311,135 @@ class Syrinx:
     def park_from_clarify(self, args: Any, *, session_id: str = "") -> list[dict[str, Any]]:
         """Park every question of a ``clarify`` call. The default is the choice the agent marked as
         recommended, else the first choice, else the agent's own judgment."""
-        args = args if isinstance(args, dict) else {}
-        questions = args.get("questions")
-        if isinstance(questions, dict):
-            questions = [questions]
-        if not isinstance(questions, list):
-            return []
-        items = []
-        for raw in questions[:8]:
-            if isinstance(raw, str):
-                raw = {"question": raw}
-            if not isinstance(raw, dict):
-                continue
-            text = str(raw.get("question") or "").strip()
-            if not text:
-                continue
-            choices = raw.get("choices")
-            default = ""
-            if isinstance(choices, list) and choices:
-                marked = [c for c in choices if isinstance(c, str) and "recommended" in c.lower()]
-                default = str((marked or choices)[0])
-            items.append(self.park(text, default or "your own best judgment", "asked while the user was heads-down",
-                                   session_id=session_id, source="clarify"))
-        return items
+        return self.park_questions(clarify_questions(args), session_id=session_id)
+
+    def park_questions(self, questions: list[dict[str, Any]], *, session_id: str = "") -> list[dict[str, Any]]:
+        return [self.park(q["question"], q.get("default") or "your own best judgment",
+                          "asked while the user was heads-down", session_id=session_id, source="clarify")
+                for q in questions]
+
+    # ----- standing answers ------------------------------------------------------------------
+    # "Answer once, never asked again." A standing answer is a question the user has settled for good.
+    # Syrinx hands it to the agent at the start of a session and stops a clarify call that asks it again.
+
+    MATCH = 0.72
+
+    def standing(self) -> list[dict[str, Any]]:
+        return list(self._get("standing", []))
+
+    def suggested(self) -> list[dict[str, Any]]:
+        return list(self._get("suggested", []))
+
+    def match_standing(self, question: Any) -> Optional[dict[str, Any]]:
+        best, score = None, 0.0
+        for item in self._get("standing", []):
+            similarity = question_similarity(question, item.get("question"))
+            if similarity > score:
+                best, score = item, similarity
+        return best if score >= self.MATCH else None
+
+    def add_standing(self, question: str, answer: str, *, source: str = "user") -> Optional[dict[str, Any]]:
+        question, answer = str(question or "").strip()[:300], str(answer or "").strip()[:300]
+        if not question or not answer:
+            return None
+        with self._lock:
+            items = self._get("standing", [])
+            existing = next((i for i in items if question_similarity(question, i.get("question")) >= self.MATCH), None)
+            if existing:
+                existing["answer"] = answer
+                item = existing
+            else:
+                item = {"id": _new_id("a"), "question": question, "answer": answer, "created": self.now().isoformat(),
+                        "uses": 0, "source": source}
+                items.append(item)
+                items = items[-60:]
+            self._set("standing", items)
+            # A suggestion that became a rule is no longer a suggestion.
+            self._set("suggested", [s for s in self._get("suggested", [])
+                                    if question_similarity(question, s.get("question")) < self.MATCH])
+            self._bump("standing_added")
+            return item
+
+    def _pick(self, items: list[dict[str, Any]], ref: Any) -> Optional[dict[str, Any]]:
+        ref = str(ref or "").strip()
+        if ref.isdigit() and 1 <= int(ref) <= len(items):
+            return items[int(ref) - 1]
+        return next((i for i in items if i.get("id") == ref), None)
+
+    def forget_standing(self, ref: Any) -> Optional[dict[str, Any]]:
+        with self._lock:
+            items = self._get("standing", [])
+            item = self._pick(items, ref)
+            if item:
+                self._set("standing", [i for i in items if i is not item])
+            return item
+
+    def accept_suggestion(self, ref: Any) -> Optional[dict[str, Any]]:
+        item = self._pick(self._get("suggested", []), ref)
+        return self.add_standing(item["question"], item["answer"], source="learned") if item else None
+
+    def always_from_parked(self, item_id: str) -> Optional[dict[str, Any]]:
+        """Turn one parked question into a standing answer: the answer given, else the default taken."""
+        for item in self._get("parked", []):
+            if item.get("id") == item_id:
+                return self.add_standing(item.get("question", ""), item.get("answer") or item.get("default", ""),
+                                         source="parked")
+        return None
+
+    def note_answer(self, question: Any, answer: Any) -> Optional[dict[str, Any]]:
+        """Remember what the user answered. The second time the same question gets the same answer,
+        Syrinx offers to make it a standing answer. Returns the new suggestion, if this made one."""
+        question, answer = str(question or "").strip()[:300], str(answer or "").strip()[:300]
+        if not question or not answer:
+            return None
+        with self._lock:
+            # A handed-back question that has now been answered in the chat is closed.
+            parked = self._get("parked", [])
+            for item in parked:
+                if item.get("status") == "handed_back" and question_similarity(question, item.get("question")) >= self.MATCH:
+                    item["status"], item["answer"], item["delivered"] = "answered", answer, True
+                    item["answered"] = self.now().isoformat()
+            self._set("parked", parked)
+
+            history = self._get("answer_history", [])
+            repeat = next((h for h in history if h.get("answer", "").lower() == answer.lower()
+                           and question_similarity(question, h.get("question")) >= self.MATCH), None)
+            history.append({"question": question, "answer": answer})
+            self._set("answer_history", history[-40:])
+            if not repeat or self.match_standing(question):
+                return None
+            suggested = self._get("suggested", [])
+            if any(question_similarity(question, s.get("question")) >= self.MATCH for s in suggested):
+                return None
+            suggestion = {"id": _new_id("s"), "question": question, "answer": answer}
+            self._set("suggested", (suggested + [suggestion])[-12:])
+            return suggestion
+
+    def standing_context(self) -> str:
+        items = self._get("standing", [])
+        if not items:
+            return ""
+        lines = ["Syrinx: the user has already settled these questions for good. Use the answer, do not ask again:"]
+        lines += [f"- {item['question']} -> {item['answer']}" for item in items[-25:]]
+        return "\n".join(lines)
+
+    def standing_text(self) -> str:
+        items, suggested = self._get("standing", []), self._get("suggested", [])
+        lines = ["Standing answers (the agent never asks these again)"]
+        if not items:
+            lines.append("None yet. Add one with: /always <question> = <answer>")
+        for index, item in enumerate(items, start=1):
+            used = f", used {item.get('uses', 0)}x" if item.get("uses") else ""
+            lines.append(f"{index}. {item['question']} -> {item['answer']}{used}")
+        if suggested:
+            lines.append("")
+            lines.append("You gave the same answer twice. Make it permanent with /always yes <number>:")
+            for index, item in enumerate(suggested, start=1):
+                lines.append(f"{index}. {item['question']} -> {item['answer']}")
+        if items:
+            lines.append("")
+            lines.append("/always forget <number> removes one.")
+        return "\n".join(lines)
 
     def answer(self, item_id: str, text: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -341,6 +496,8 @@ class Syrinx:
                 "queued": self.queued_open(),
             },
             "parked": self.parked_open(),
+            "standing": self.standing(),
+            "suggested": self.suggested(),
             "stats": self.stats(),
             "week": self.card_data()["days"],
             "receipt": self.receipt_text(),
@@ -379,26 +536,71 @@ class Syrinx:
             return True
 
     def clarify_directive(self, args: Any, *, session_id: str = "") -> Optional[dict[str, Any]]:
-        """What ``pre_tool_call`` returns for a ``clarify`` call. ``None`` lets it through."""
+        """What ``pre_tool_call`` returns for a ``clarify`` call. ``None`` lets it through.
+
+        Two things can stop a question: a standing answer (always), and a focus block (while it runs).
+        """
+        questions = clarify_questions(args)
+        settled, open_questions = [], []
+        for question in questions:
+            match = self.match_standing(question["question"])
+            (settled if match else open_questions).append((question, match))
+
+        # Safety valve: if the agent asks the very same thing again right away, it is telling us the
+        # standing answer does not fit this case. Let it through once.
+        if settled:
+            key = "|".join(sorted(" ".join(sorted(question_tokens(q["question"]))) for q, _ in settled))
+            with self._lock:
+                insisted = self._get("standing_insist", {})
+                stamp = insisted.get(session_id or "*", {})
+                again = stamp.get("key") == key and (self.now() - datetime.fromisoformat(stamp["at"])).total_seconds() < 180
+                insisted[session_id or "*"] = {"key": key, "at": self.now().isoformat()}
+                self._set("standing_insist", dict(list(insisted.items())[-20:]))
+            if again:
+                settled, open_questions = [], [(q, None) for q in questions]
+
         focus = self.focus()
-        if not focus.get("active"):
-            return None
-        if self.consume_clarify_pass(session_id):
+        in_focus = bool(focus.get("active"))
+        if in_focus and open_questions and self.consume_clarify_pass(session_id):
             self._bump("interruptions_urgent")
+            in_focus = False
+        if not settled and not in_focus:
             return None
-        items = self.park_from_clarify(args, session_id=session_id)
-        until = datetime.fromisoformat(focus["until"])
-        lines = [
-            f"Syrinx: the user is in a focus block until {fmt_clock(until)} and is not reading the chat. "
-            "This question was parked for them, not shown.",
-        ]
-        for item in items:
-            lines.append(f"- {item['id']}: \"{item['question']}\" parked. Default to use now: {item['default']}.")
-        lines.append(
-            "Continue the task with those defaults and say in your reply which defaults you took. "
-            "Park anything else with syrinx_park(question, default, why). Only if the task truly cannot "
-            "move without an answer, call syrinx_interrupt(question, why) and then ask with clarify."
-        )
+
+        lines: list[str] = []
+        if settled:
+            with self._lock:
+                items = self._get("standing", [])
+                for _, match in settled:
+                    for item in items:
+                        if item.get("id") == match.get("id"):
+                            item["uses"] = int(item.get("uses", 0)) + 1
+                self._set("standing", items)
+            self._bump("questions_auto_answered", len(settled))
+            lines.append("Syrinx: the user already settled this for good, so it was not asked again.")
+            for question, match in settled:
+                lines.append(f"- \"{question['question']}\" -> use: {match['answer']}")
+            lines.append("If this case is truly different from the standing answer, ask again and it will go through.")
+
+        if open_questions and in_focus:
+            items = self.park_questions([q for q, _ in open_questions], session_id=session_id)
+            until = datetime.fromisoformat(focus["until"])
+            lines.append(
+                f"Syrinx: the user is in a focus block until {fmt_clock(until)} and is not reading the chat. "
+                "This question was parked for them, not shown."
+            )
+            for item in items:
+                lines.append(f"- {item['id']}: \"{item['question']}\" parked. Default to use now: {item['default']}.")
+            lines.append(
+                "Continue the task with those defaults and say in your reply which defaults you took. "
+                "Park anything else with syrinx_park(question, default, why). Only if the task truly cannot "
+                "move without an answer, call syrinx_interrupt(question, why) and then ask with clarify."
+            )
+        elif open_questions:
+            lines.append("Ask only the remaining questions, in one clarify call:")
+            lines += [f"- {q['question']}" for q, _ in open_questions]
+        else:
+            lines.append("Continue the task with those answers.")
         return {"action": "block", "message": "\n".join(lines)}
 
     # ----- night -----------------------------------------------------------------------------
@@ -644,6 +846,9 @@ class Syrinx:
         lines.append(f"Focus kept: {fmt_minutes(minutes)} across {blocks} block{'s' if blocks != 1 else ''}.")
         lines.append(f"Questions parked: {parked}, handed back in batches: {batched}, urgent interruptions: {urgent}.")
         lines.append(f"Late-night requests queued for the morning: {queued}.")
+        auto = int(stats.get("questions_auto_answered", 0))
+        if auto:
+            lines.append(f"Questions you never had to answer again: {auto}.")
         necessary = int(stats.get("interruptions_necessary", 0))
         if necessary:
             lines.append(f"Approvals that still reached you during focus: {necessary}.")

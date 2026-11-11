@@ -272,8 +272,17 @@ function ParkedItem({ ctx, item }) {
     mutationFn: (value) => ctx.rest('/answer', { method: 'POST', body: { id: item.id, answer: value } }),
     onSuccess: refresh
   })
+  // "Always" keeps the default for this question from now on, and answers it this time too.
+  const always = useMutation({
+    mutationFn: async () => {
+      await ctx.rest('/always', { method: 'POST', body: { id: item.id } })
+      return ctx.rest('/answer', { method: 'POST', body: { id: item.id, answer: item.default } })
+    },
+    onSuccess: refresh
+  })
   return jsxs('div', {
     className: 'flex flex-col gap-1 rounded-md border border-(--ui-stroke-secondary) p-2',
+    style: { display: 'flex', flexDirection: 'column', gap: 4, padding: 8 },
     children: [
       jsx('div', { className: 'text-sm', children: item.question }),
       jsxs('div', {
@@ -282,12 +291,20 @@ function ParkedItem({ ctx, item }) {
       }),
       jsxs('div', {
         className: 'flex gap-1.5 pt-1',
+        style: { display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 4 },
         children: [
           jsx(Button, {
             size: 'sm',
             variant: 'secondary',
             onClick: () => answer.mutate(item.default),
             children: 'Keep default'
+          }),
+          jsx(Button, {
+            size: 'sm',
+            variant: 'secondary',
+            title: 'Settle this for good: the agent will not ask again',
+            onClick: () => always.mutate(),
+            children: 'Always'
           }),
           jsx(Input, {
             value: text,
@@ -312,6 +329,60 @@ function Parked({ ctx, data }) {
       ? items.map((item) => jsx(ParkedItem, { ctx, item }, item.id))
       : [jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: 'Nothing parked. The agent will park its questions here while you are in flow.' })]
   })
+}
+
+// Standing answers: questions settled for good, and ones Syrinx noticed you answer the same way.
+function Standing({ ctx, data }) {
+  const items = data.standing || []
+  const suggested = data.suggested || []
+  const accept = useMutation({
+    mutationFn: (id) => ctx.rest('/always', { method: 'POST', body: { suggestion: id } }),
+    onSuccess: refresh
+  })
+  const forget = useMutation({
+    mutationFn: (id) => ctx.rest('/always/forget', { method: 'POST', body: { id } }),
+    onSuccess: refresh
+  })
+  const row = { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }
+  const children = []
+  for (const s of suggested) {
+    children.push(jsxs('div', {
+      className: 'rounded-md border border-(--ui-stroke-secondary) text-xs',
+      style: { ...row, padding: 8 },
+      children: [
+        jsxs('div', {
+          children: [
+            jsx('div', { className: 'text-(--ui-text-tertiary)', children: 'You answered this the same way twice:' }),
+            jsx('div', { children: `${s.question} → ${s.answer}` })
+          ]
+        }),
+        jsx(Button, { size: 'sm', variant: 'secondary', onClick: () => accept.mutate(s.id), children: 'Always' })
+      ]
+    }, s.id))
+  }
+  for (const a of items) {
+    children.push(jsxs('div', {
+      className: 'text-xs',
+      style: row,
+      children: [
+        jsxs('div', {
+          children: [
+            jsx('span', { className: 'text-(--ui-text-tertiary)', children: `${a.question} → ` }),
+            jsx('span', { children: a.answer }),
+            a.uses ? jsx('span', { className: 'text-(--ui-text-quaternary)', children: `  ·  used ${a.uses}×` }) : null
+          ]
+        }),
+        jsx(Button, { size: 'sm', variant: 'ghost', title: 'Forget this answer', onClick: () => forget.mutate(a.id), children: '×' })
+      ]
+    }, a.id))
+  }
+  if (!children.length) {
+    children.push(jsx('div', {
+      className: 'text-xs text-(--ui-text-tertiary)',
+      children: 'Nothing settled yet. Press Always on a question, or type /always tabs or spaces = spaces.'
+    }, 'empty'))
+  }
+  return jsx(Section, { title: 'Never ask again', children })
 }
 
 function Night({ ctx, data }) {
@@ -445,6 +516,8 @@ function Pane({ ctx }) {
         jsx(Now, { ctx, data }),
         jsx(Separator, {}),
         jsx(Parked, { ctx, data }),
+        jsx(Separator, {}),
+        jsx(Standing, { ctx, data }),
         jsx(Separator, {}),
         jsx(Night, { ctx, data }),
         jsx(Separator, {}),

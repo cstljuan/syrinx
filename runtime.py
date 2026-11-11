@@ -28,6 +28,7 @@ HELP = (
     "/catchup               what happened, and hand back the parked questions\n"
     "/late [minutes]        keep working past the cutoff for a while\n"
     "/night HH:MM [HH:MM]   set the cutoff and, optionally, the morning time\n"
+    "/always [q = a]        standing answers: settle a question once, never be asked again\n"
     "/syrinx [receipt|week] status, the time receipt, or the last 7 days\n"
     "/syrinx card           save the receipt as a shareable image (numbers only)\n"
     "/syrinx pet            add Argus, the Syrinx mascot, to your Hermes pets\n"
@@ -184,11 +185,37 @@ class Runtime:
             logger.debug("syrinx: pre_tool_call failed open", exc_info=True)
             return None
 
+    def _learn_from_clarify(self, args: Any, result: Any) -> None:
+        """Read the answers the user gave to a clarify card: close handed-back questions, and notice a
+        question that got the same answer twice."""
+        try:
+            data = json.loads(result) if isinstance(result, str) else result
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        responses = data.get("responses")
+        questions = core.clarify_questions(args)
+        if not isinstance(responses, list):
+            return
+        learned = False
+        for question, response in zip(questions, responses):
+            if not isinstance(response, dict) or response.get("status") != "answered":
+                continue
+            answer = response.get("user_response")
+            if isinstance(answer, list):
+                answer = ", ".join(str(part) for part in answer)
+            if self.k.note_answer(question["question"], answer):
+                learned = True
+        self._changed("learned" if learned else "answered")
+
     def post_tool_call(self, tool_name: str = "", args: Optional[dict] = None, result: str = "",
                        task_id: str = "", duration_ms: int = 0, session_id: str = "", **kwargs: Any) -> None:
         try:
             if tool_name.startswith("syrinx_"):
                 return
+            if tool_name == "clarify":
+                self._learn_from_clarify(args, result)
             self.k.record_tool(session_id or task_id, tool_name, args, duration_ms=duration_ms)
             self.presence_tick()
         except Exception:
@@ -208,6 +235,12 @@ class Runtime:
                 self.k.queue_for_morning(text, session_id=session_id)
                 self._changed("queued")
                 return {"action": "block", "message": self.k.night_block_message()}
+
+            # Start of a session: the questions the user has settled for good.
+            if is_first_turn:
+                standing = self.k.standing_context()
+                if standing:
+                    contexts.append(standing)
 
             # Morning: hand over what was queued, once.
             morning = self.k.take_morning_brief()
@@ -395,6 +428,28 @@ class Runtime:
             return "Syrinx could not save the card on this system.\n\n" + self.k.receipt_text()
         return f"Receipt card saved: {path}\nIt holds numbers only, no question text and no file names.\n\n" + self.k.receipt_text()
 
+    def cmd_always(self, raw_args: str = "", **kwargs: Any) -> str:
+        """/always, /always <question> = <answer>, /always yes N, /always forget N."""
+        arg = (raw_args or "").strip()
+        if not arg:
+            return self.k.standing_text()
+        head, _, rest = arg.partition(" ")
+        if head.lower() == "forget":
+            gone = self.k.forget_standing(rest)
+            self._changed("standing")
+            return f"Forgotten: {gone['question']}" if gone else "No standing answer with that number. /always lists them."
+        if head.lower() in ("yes", "accept"):
+            made = self.k.accept_suggestion(rest)
+            self._changed("standing")
+            return (f"Settled for good: {made['question']} -> {made['answer']}. The agent will not ask again."
+                    if made else "No suggestion with that number. /always lists them.")
+        question, sep, answer = arg.partition("=")
+        if not sep or not question.strip() or not answer.strip():
+            return "Use /always <question> = <answer>, for example: /always tabs or spaces = spaces"
+        made = self.k.add_standing(question, answer)
+        self._changed("standing")
+        return f"Settled for good: {made['question']} -> {made['answer']}. The agent will not ask again."
+
     def cmd_syrinx(self, raw_args: str = "", **kwargs: Any) -> str:
         arg = (raw_args or "").strip().lower()
         if arg in ("receipt", "stats"):
@@ -449,6 +504,8 @@ def register(ctx: Any) -> None:
                          args_hint="[minutes]")
     ctx.register_command("night", rt.cmd_night, description="Set the Syrinx cutoff and morning time",
                          args_hint="HH:MM [HH:MM]")
+    ctx.register_command("always", rt.cmd_always, description="Standing answers: settle a question once so the agent never asks again",
+                         args_hint="[<question> = <answer> | yes N | forget N]")
     ctx.register_command("syrinx", rt.cmd_syrinx, description="Syrinx status, receipt and help",
                          args_hint="[receipt|week|card|pet|help]")
     return rt

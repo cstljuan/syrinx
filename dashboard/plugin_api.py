@@ -143,3 +143,27 @@ def catchup() -> dict[str, Any]:
 def card() -> dict[str, Any]:
     """The shareable receipt card as SVG text. Numbers only."""
     return {"svg": _card.receipt_svg(_syrinx().card_data())}
+
+
+@router.post("/always")
+def always(body: dict) -> dict[str, Any]:
+    """Make a standing answer: from a parked question (``id``), a suggestion (``suggestion``), or free text."""
+    k = _kairos()
+    body = body if isinstance(body, dict) else {}
+    if body.get("id"):
+        item = k.always_from_parked(str(body["id"]))
+    elif body.get("suggestion"):
+        item = k.accept_suggestion(str(body["suggestion"]))
+    else:
+        item = k.add_standing(str(body.get("question") or ""), str(body.get("answer") or ""))
+    _broadcast("standing", k.status_line())
+    return {"ok": item is not None, "snapshot": _snapshot(k)}
+
+
+@router.post("/always/forget")
+def always_forget(body: dict) -> dict[str, Any]:
+    k = _kairos()
+    item = k.forget_standing(str((body or {}).get("id") or ""))
+    _broadcast("standing", k.status_line())
+    return {"ok": item is not None, "snapshot": _snapshot(k)}
+
