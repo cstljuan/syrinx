@@ -6,7 +6,7 @@
 
 Argus had a hundred eyes and nothing got past him. Hermes sat down beside him and played the syrinx, his reed pipe, until one eye after another closed. This plugin is that pipe: it puts your agent's interruptions to sleep while you work, and wakes them, all at once, when you are ready.
 
-Syrinx is a Hermes Agent plugin for one problem: an agent that works for an hour still stops every few minutes to ask you something. Syrinx decides **when** a question reaches you, **whether** it has to reach you at all, holds anything that would **leave your machine** until you are back, and shows you **proof** of what happened while you were not looking. All of it runs on hooks, so no prompt or skill can do the same.
+Syrinx is a Hermes Agent plugin for one problem: an agent that works for an hour still stops every few minutes to ask you something. Syrinx decides **when** a question reaches you, **whether** it has to reach you at all, holds the **outward actions** it knows (push, publish, send, deploy) until you are back, and shows you **proof** of what happened while you were not looking. All of it runs on hooks, so no prompt or skill can do the same.
 
 ## See it in ten seconds
 
@@ -28,13 +28,15 @@ Start a focus block with `/flow 45`, or say it in your own words ("heads down fo
 
 When the block ends, your next message gets a three-line catch-up, then a list headed **Counted by Syrinx**, then every parked question in **one card** with the default marked. Pick differently and the agent redoes that piece.
 
+The hand-back goes to the conversation that parked the questions, and nowhere else. If several people or several chats share one Hermes profile, none of them is handed another's questions, held actions or queued requests. The Desktop pane shows all of them, for you to look at.
+
 The counted list is written by code from the tool calls themselves, not by the model, so it cannot flatter:
 
 ```
 Held for you, did not run (1): git push.
 Files changed (2 edits): api.py, test_api.py.
 Commands run (1): pytest.
-Nothing left your machine.
+No outward action seen.
 Built on 1 unconfirmed default: 3 steps. Changing an answer may mean redoing them.
 ```
 
@@ -42,13 +44,13 @@ The last line is **assumption debt**: how much work was stacked on answers you h
 
 ![Back from a flow: catch-up, the counted list, and one card](docs/screenshots/return-card.jpg)
 
-### 3. Hold: nothing leaves your machine while you are away
+### 3. Hold: pushes, publishes and sends wait for you
 
-During a flow, anything that would leave your machine is stopped **before it runs**: `git push`, a package publish, `gh pr create`, a deploy, a message or an email sent by a tool. The agent is told it is held and carries on with everything else. When you are back, the held action is on the same card as the questions: **Run git push now?** You say yes, and only then does it run.
+During a flow, the outward actions Syrinx knows about are stopped **before they run**: `git push`, a package publish, `gh pr create`, a deploy, a message or an email sent by a tool. The agent is told it is held and carries on with everything else. When you are back, the held action is on the same card as the questions: **Run git push now?** You say yes, and only then does it run.
 
 ![Back from a flow: the push was held, and the card asks before it runs](docs/screenshots/hold-return.jpg)
 
-So you can hand an agent an hour and know the worst it can do is local. Local commands, tests, edits and commits are never held, and unattended (cron) runs are never touched. `/syrinx hold off` turns it off; outward actions then run and are flagged at the top of the counted list.
+Hold covers a fixed list of command patterns and tool names, listed under [Disclosure](#disclosure). It is a guard, not a sandbox: other routes still run, such as a script that pushes or uploads, `execute_code`, and browser or MCP tools. Local commands, tests, edits and commits are never held, and unattended (cron) runs are never touched. `/syrinx hold off` turns it off; outward actions then run and are flagged at the top of the counted list.
 
 ### 4. Never ask again
 
@@ -65,6 +67,8 @@ If the agent insists the case is different and asks again right away, the questi
 ### 5. Night: late ideas become a morning brief
 
 After your cutoff (10:30 PM by default) a new request is queued instead of started, with a kind note. It arrives as a morning brief at your wake time, with yesterday's numbers, and the agent starts on it. `/late 20` is the guilt-free override.
+
+The cutoff is for you, sitting at this machine: it applies in the CLI, the TUI and Desktop. Messaging users, API-server runs, kanban workers and subagents are never refused. If you want it on a messaging platform too, list it in `night_platforms`. A queued request comes back in the conversation it was typed in.
 
 ### 6. Flow that starts by itself
 
@@ -129,7 +133,8 @@ Under `plugins.entries.syrinx.settings`, also editable in Desktop under Settings
 | `wake` | `"08:00"` | When the night ends and the morning brief is delivered. |
 | `focus_minutes` | `45` | Length of `/flow` with no number. |
 | `night_enabled` | `true` | Set `false` to keep only the focus features. |
-| `hold_outward` | `true` | During a flow, hold anything that would leave this machine until you are back. |
+| `night_platforms` | `""` | Extra platforms, comma separated, where the cutoff also applies (for example `telegram`). Empty means only cli, tui and desktop. |
+| `hold_outward` | `true` | During a flow, hold pushes, publishes, sends and deploys (a fixed list) until you are back. |
 | `question_budget` | `0` | Question cards per hour outside a flow. `0` means no limit. |
 | `auto_focus` | `false` | macOS only. Open and close focus blocks from presence. |
 | `auto_focus_minutes` | `30` | Length of an automatic block; extended while you stay in another app. |
@@ -143,8 +148,8 @@ Under `plugins.entries.syrinx.settings`, also editable in Desktop under Settings
 | Hold a push, publish, send or deploy during a block | `pre_tool_call` on every other tool returns a block directive when the call matches a fixed list of outward actions. Only a short label is stored, never the command. |
 | Learn your answers, close handed-back questions, count the agent's hit rate | `post_tool_call` on `clarify` reads the card's responses |
 | Let the agent park, escalate, read the state, or start a block you asked for | tools `syrinx_park`, `syrinx_interrupt`, `syrinx_status`, `syrinx_flow` |
-| Standing answers at session start, behavior during a block, the return hand-back, the morning brief | `pre_llm_call` context, appended to the user message, never the system prompt |
-| Queue a late-night request | `pre_llm_call` block directive; the message is kept and delivered in the morning |
+| Standing answers at session start, behavior during a block, the return hand-back, the morning brief | `pre_llm_call` context, appended to the user message, never the system prompt. The hand-back and the brief go only to the session that created them. |
+| Queue a late-night request | `pre_llm_call` block directive; the message is kept and delivered in the morning to the same session. Only on cli, tui and desktop unless `night_platforms` adds more; never for a subagent. |
 | The counted away report and assumption debt | `post_tool_call`: tool name, file basename, program names, and a fixed label for outward actions. Never arguments. |
 | Count the interruptions that still had to reach you | `on_human_input_request` for approvals and password prompts |
 | The live status line | `ctx.post_message` and `handle.edit` |
@@ -163,15 +168,17 @@ The catalog has a plugin called `kairos` (wind-down nudges against a bedtime, sl
 - **No network calls.** Syrinx makes none of its own. The optional catch-up tightening goes through `ctx.llm` on whatever provider and model you already use.
 - **Shell commands: two, read-only, and only when you turn `auto_focus` on.** `ioreg -c IOHIDSystem -d 4` for the idle time and `lsappinfo front` / `lsappinfo info` for the front app's bundle id, at most once every 10 seconds, with a 3 second timeout. The bundle id is compared in memory and never written anywhere. With `auto_focus` off (the default) Syrinx runs no commands at all.
 - **It can stop a question card.** During a focus block, over the question budget you set, or when a standing answer covers it, a `clarify` call is blocked and the agent is told which default or answer to use. If the agent asks the same settled question again right away, it goes through.
-- **It can stop an outward action.** During a focus block, and only then, a tool call that would leave your machine (`git push`, a package publish, `gh pr/release/issue create`, `curl` with a body, `ssh`, `docker push`, `kubectl apply/delete`, `terraform`/`pulumi` apply, `drop table`, or a tool whose name says send, post, publish, email, deploy, upload or pay) is blocked before it runs and offered back to you after the block. It stores the label ("git push"), never the command. Syrinx never runs a held action itself: the agent does, after you say yes. `hold_outward: false` or `/syrinx hold off` disables this.
+- **It can stop an outward action.** During a focus block, and only then, a tool call on a fixed list of outward actions (`git push`, a package publish, `gh pr/release/issue create`, `curl` with a body, `ssh`, `docker push`, `kubectl apply/delete`, `terraform`/`pulumi` apply, `drop table`, or a tool whose name says send, post, publish, email, deploy, upload or pay) is blocked before it runs and offered back to you after the block. It stores the label ("git push"), never the command. Syrinx never runs a held action itself: the agent does, after you say yes. `hold_outward: false` or `/syrinx hold off` disables this.
 - **It adds text to your message.** Standing answers at the start of a session, behavior notes during a block, the hand-back after it, and the morning brief are appended through `pre_llm_call`. The system prompt is never changed.
-- **It can end a turn before the model is called.** Only after your cutoff, to queue the request for the morning. `/late` or `night_enabled: false` turns that off.
+- **It can end a turn before the model is called.** Only after your cutoff, and only in the CLI, the TUI and Desktop (plus any platform you add with `night_platforms`), to queue the request for the morning. Messaging users, API-server runs, kanban workers and subagents are never refused. `/late` or `night_enabled: false` turns that off.
 - **Approvals are untouched.** Syrinx never auto-approves, never answers a prompt, and never changes approval routing.
 - **No background processes, no binaries.** The Desktop half is plain ES module source that only imports the plugin SDK and React; the backend is a FastAPI router mounted by Hermes behind the dashboard's own auth gate.
 - **Stored data:** focus blocks, deep-work hours, parked questions with the defaults and answers, standing answers and the last 40 answered questions (to notice a repeat), queued late-night requests (the text of your message, so it can be delivered in the morning), per-session tool names with file basenames, program names and durations, the last reply of each session (first 600 characters) for the catch-up, and counters. All of it stays in your Hermes profile's plugin state. `syrinx_status` exposes only flags and counts to the model. `/syrinx card` writes one file, `syrinx-receipt.svg`, into the same folder; it contains counters only.
 - **The pet:** `/syrinx pet` hands the bundled Argus sprite sheet to Hermes' own pet store, which writes it under your profile's `pets/argus/`. Syrinx does not select the pet or change any display setting.
 - **Bundled art:** the card background, the painted numerals and the Argus images are files inside the plugin folder (`assets/`, about a megabyte and a half). They are read from disk and embedded as data; nothing is fetched.
-- **Unattended runs:** cron-driven turns are never blocked or queued.
+- **Hold is a guard, not a sandbox.** It matches command patterns and tool names. A script that pushes or uploads, `execute_code`, and browser or MCP tools can still send something out, and the counted list can only report what it matched ("No outward action seen").
+- **Scope.** Parked questions, held actions, pane answers and queued requests are handed back only to the session that created them; a subagent's go to the conversation that started it. The Desktop pane lists all of them for display. Focus blocks, standing answers and the counters belong to the Hermes profile, so a flow you start holds questions and outward actions for every session on that profile.
+- **Unattended runs:** cron-driven turns are never blocked or queued. Subagents, API-server runs and kanban workers are never refused at night.
 - **No telemetry.**
 
 ## Development

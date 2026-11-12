@@ -25,6 +25,7 @@ TRACE_MAX = 200
 PARKED_MAX = 40
 QUEUE_MAX = 40
 HELD_MAX = 40
+RETURNED_MAX = 60    # sessions remembered as already given the return of one block
 SUMMARY_MAX_CHARS = 80
 
 
@@ -53,6 +54,15 @@ class MemoryStore(Store):
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:6]}"
+
+
+def _mine(owner: Any, session_id: str) -> bool:
+    """Whether a stored item belongs to the asking session. ``*`` is the pane, which has no session
+    of its own and may show everything; it is used for display only, never to hand anything to an
+    agent. An item stored without a session belongs to no session: it stays visible in the pane."""
+    if session_id == "*":
+        return True
+    return bool(session_id) and str(owner or "") == session_id
 
 
 def parse_hhmm(text: str) -> Optional[dtime]:
@@ -126,10 +136,43 @@ def clarify_questions(args: Any) -> list[dict[str, Any]]:
     return out
 
 
+COMMAND_SCAN_MAX = 8192
+_HEREDOC_OPEN = re.compile(r"<<-?[ \t]{0,8}['\"]?(\w{1,64})['\"]?[^\n]{0,512}\n")
+
+
+def strip_heredocs(command: str) -> str:
+    """Drop heredoc bodies, so file contents never count as commands. Linear time: a bounded match
+    for the opening line, then ``str.find`` for the terminator. An opener with no terminator is left
+    as it is."""
+    if "<<" not in command or "\n" not in command:
+        return command
+    out: list[str] = []
+    pos = 0
+    while True:
+        match = _HEREDOC_OPEN.search(command, pos)
+        if not match:
+            break
+        tag = match.group(1)
+        end = command.find("\n" + tag, match.end() - 1)
+        while end != -1:
+            after = command[end + 1 + len(tag): end + 2 + len(tag)]
+            if not (after.isalnum() or after == "_"):     # EOF, not EOFX
+                break
+            end = command.find("\n" + tag, end + 1)
+        if end == -1:
+            break
+        out.append(command[pos:match.start()])
+        out.append(" ")
+        pos = end + 1 + len(tag)
+    out.append(command[pos:])
+    return "".join(out)
+
+
 def command_programs(command: str, limit: int = 4) -> list[str]:
     """The program names a shell command runs (``mkdir``, ``python3``), in order, without arguments.
-    Heredoc bodies are dropped first, so file contents never count as commands."""
-    command = re.sub(r"<<-?\s*['\"]?(\w+)['\"]?.*?\n\1\b", " ", command, flags=re.S)
+    Heredoc bodies are dropped first, so file contents never count as commands. Only the first
+    COMMAND_SCAN_MAX characters are read: this is a summary line, not a check."""
+    command = strip_heredocs(command[:COMMAND_SCAN_MAX])
     programs: list[str] = []
     for segment in re.split(r"&&|\|\||[;|\n]", command):
         words = segment.strip().split()
@@ -279,6 +322,7 @@ class Syrinx:
                 "until": (start + timedelta(minutes=minutes)).isoformat(),
                 "minutes": minutes,
                 "pending_return": False,
+                "returned": [],
             }
             self._set("focus", focus)
             self._bump("blocks_started")
@@ -316,6 +360,7 @@ class Syrinx:
             "reason": reason,
             "last_minutes": minutes,
             "pending_return": True,
+            "returned": [],
             "source": focus.get("source", "manual"),
         })
         self._bump("focus_minutes", minutes)
@@ -336,18 +381,37 @@ class Syrinx:
         started = datetime.fromisoformat(focus["started"])
         return max(0, int((self.now() - started).total_seconds() // 60))
 
-    def take_pending_return(self) -> bool:
-        """True once after a focus block ended, so the next turn can deliver the catch-up."""
+    def take_pending_return(self, session_id: str) -> bool:
+        """True once per session after a focus block ended, and only for a session that has something
+        of its own to hear about: its tool calls in the block, its parked questions or its held
+        actions. A session that took no part in the block gets nothing, so one person's hand-back is
+        never delivered into another person's conversation."""
+        if not session_id or session_id == "*":
+            return False
         with self._lock:
             focus = self.focus()
-            if focus.get("pending_return") and not focus.get("active"):
-                focus["pending_return"] = False
-                self._set("focus", focus)
-                return True
-            if self._get("budget_return", False) and not focus.get("active"):
-                self._set("budget_return", False)
-                return True
-            return False
+            if focus.get("active"):
+                return False
+            due = False
+            if focus.get("pending_return"):
+                returned = [str(item) for item in focus.get("returned", [])]
+                if session_id not in returned and self._has_return(session_id):
+                    returned.append(session_id)
+                    focus["returned"] = returned[-RETURNED_MAX:]
+                    self._set("focus", focus)
+                    due = True
+            waiting = self._get("budget_return", [])
+            if session_id in waiting:          # questions parked over the hourly budget, outside a block
+                self._set("budget_return", [item for item in waiting if item != session_id])
+                due = True
+            return due
+
+    def _has_return(self, session_id: str) -> bool:
+        """Whether this session took part in the block that just ended: a tool call of its own while
+        the block ran, or a question or held action of its own still waiting."""
+        ended = str(self._get("focus", {}).get("ended") or "")
+        rows = [row for row in self._block_rows(session_id) if not ended or str(row.get("t", "")) <= ended]
+        return bool(rows or self.parked_open(session_id) or self.held_open(session_id))
 
     # ----- deep-work hours -------------------------------------------------------------------
     # Flow that starts by itself: "every weekday 09:00 to 11:00". Checked lazily, no scheduler needed.
@@ -428,12 +492,16 @@ class Syrinx:
 
     # ----- parking ---------------------------------------------------------------------------
 
-    def parked_open(self) -> list[dict[str, Any]]:
-        return [item for item in self._get("parked", []) if item.get("status") == "parked"]
+    def parked_open(self, session_id: str = "*") -> list[dict[str, Any]]:
+        """Questions still parked. The default ``*`` is every session, for the pane and the counters;
+        pass a session to get only its own."""
+        return [item for item in self._get("parked", [])
+                if item.get("status") == "parked" and _mine(item.get("session_id"), session_id)]
 
-    def handed_back_open(self) -> list[dict[str, Any]]:
+    def handed_back_open(self, session_id: str = "*") -> list[dict[str, Any]]:
         """Questions handed back to the user and not answered yet."""
-        return [item for item in self._get("parked", []) if item.get("status") == "handed_back"]
+        return [item for item in self._get("parked", [])
+                if item.get("status") == "handed_back" and _mine(item.get("session_id"), session_id)]
 
     def park(self, question: str, default: str = "", why: str = "", *, session_id: str = "",
              urgent: bool = False, source: str = "agent") -> dict[str, Any]:
@@ -615,11 +683,13 @@ class Syrinx:
                     return item
             return None
 
-    def take_answered(self) -> list[dict[str, Any]]:
-        """Answers given outside the chat (the Desktop pane) that the agent has not seen yet."""
+    def take_answered(self, session_id: str) -> list[dict[str, Any]]:
+        """Answers given outside the chat (the Desktop pane) that the agent has not seen yet. Only the
+        session that parked a question is told its answer."""
         with self._lock:
             parked = self._get("parked", [])
-            fresh = [item for item in parked if item.get("status") == "answered" and not item.get("delivered", True)]
+            fresh = [item for item in parked if item.get("status") == "answered" and not item.get("delivered", True)
+                     and session_id != "*" and _mine(item.get("session_id"), session_id)]
             for item in fresh:
                 item["delivered"] = True
             if fresh:
@@ -672,14 +742,15 @@ class Syrinx:
             "receipt": self.receipt_text(),
         }
 
-    def hand_back(self) -> list[dict[str, Any]]:
-        """Mark every open question as handed back to the person (the agent will ask them in one
-        pass) and return them."""
+    def hand_back(self, session_id: str) -> list[dict[str, Any]]:
+        """Mark this session's open questions as handed back to the person (the agent will ask them
+        in one pass) and return them. Questions parked by another session stay parked for it."""
         with self._lock:
             parked = self._get("parked", [])
             handed = []
             for item in parked:
-                if item.get("status") == "parked":
+                if (item.get("status") == "parked" and session_id != "*"
+                        and _mine(item.get("session_id"), session_id)):
                     item["status"] = "handed_back"
                     item["handed_back"] = self.now().isoformat()
                     handed.append(dict(item))
@@ -777,7 +848,10 @@ class Syrinx:
             )
         elif open_questions and over_budget:
             items = self.park_questions([q for q, _ in open_questions], session_id=session_id)
-            self._set("budget_return", True)
+            waiting = [item for item in self._get("budget_return", []) if item != session_id]
+            if session_id:
+                waiting.append(session_id)
+            self._set("budget_return", waiting[-RETURNED_MAX:])
             self._bump("questions_budgeted", len(items))
             lines.append(
                 f"Syrinx: the user allows {self.budget()} question cards an hour and that is used up, so this was "
@@ -795,7 +869,7 @@ class Syrinx:
         return {"action": "block", "message": "\n".join(lines)}
 
     # ----- hold ------------------------------------------------------------------------------
-    # During a focus block nothing leaves the machine. A push, publish, send or deploy is stopped
+    # During a focus block the known outward actions wait. A push, publish, send or deploy is stopped
     # before it runs, remembered by its label only, and offered back on the same card as the questions.
 
     def hold_enabled(self) -> bool:
@@ -806,8 +880,10 @@ class Syrinx:
         self._set("hold", "on" if on else "off")
         return bool(on)
 
-    def held_open(self) -> list[dict[str, Any]]:
-        return [item for item in self._get("held", []) if item.get("status") == "held"]
+    def held_open(self, session_id: str = "*") -> list[dict[str, Any]]:
+        """Actions held and not offered back yet. ``*`` is every session, for the pane."""
+        return [item for item in self._get("held", [])
+                if item.get("status") == "held" and _mine(item.get("session"), session_id)]
 
     def _would_hold(self, tool_name: str, args: Any) -> str:
         if not self.hold_enabled() or not self.focus().get("active"):
@@ -833,19 +909,21 @@ class Syrinx:
         until = datetime.fromisoformat(self.focus()["until"])
         return {"action": "block", "message": (
             f"Syrinx held this action ({label}). It did not run. The user is in a focus block until {fmt_clock(until)}, "
-            "and nothing that leaves this machine runs while they are away. Do not retry it and do not reach the same "
+            "and pushes, publishes, sends and deploys wait while they are away. Do not retry it and do not reach the same "
             "result another way. If the same command also did other things, run those again without this part. "
             "Finish everything else, and say in your reply that this is waiting for them. "
             "Syrinx will offer it back on their return card."
         )}
 
-    def offer_held(self) -> list[dict[str, Any]]:
-        """Mark every held action as offered back to the person and return them."""
+    def offer_held(self, session_id: str) -> list[dict[str, Any]]:
+        """Mark this session's held actions as offered back to the person and return them. An action
+        held in another session is offered only there."""
         with self._lock:
             held = self._get("held", [])
             offered = []
             for item in held:
-                if item.get("status") == "held":
+                if (item.get("status") == "held" and session_id != "*"
+                        and _mine(item.get("session"), session_id)):
                     item["status"] = "offered"
                     offered.append(dict(item))
             self._set("held", held)
@@ -855,8 +933,7 @@ class Syrinx:
         focus = self._get("focus", {})
         since = focus.get("started") if focus.get("active") else focus.get("last_started")
         return [item for item in self._get("held", [])
-                if (not since or str(item.get("t", "")) >= since)
-                and (session_id in ("", "*") or item.get("session") in (session_id, "*"))]
+                if (not since or str(item.get("t", "")) >= since) and _mine(item.get("session"), session_id or "*")]
 
     # ----- night -----------------------------------------------------------------------------
 
@@ -934,26 +1011,32 @@ class Syrinx:
             self._bump("requests_queued")
             return item
 
-    def queued_open(self) -> list[dict[str, Any]]:
-        return [item for item in self.night().get("queued", []) if not item.get("delivered")]
+    def queued_open(self, session_id: str = "*") -> list[dict[str, Any]]:
+        """Requests queued for the morning. ``*`` is every session, for the pane."""
+        return [item for item in self.night().get("queued", [])
+                if not item.get("delivered") and _mine(item.get("session_id"), session_id)]
 
     def night_block_message(self) -> str:
         wake = self.wake()
         return (
             f"It is {fmt_clock(self.now())}. Your cutoff is {fmt_clock(datetime.combine(self.now().date(), self.cutoff()))}, "
             f"so Syrinx queued this for the morning brief at {fmt_clock(datetime.combine(self.now().date(), wake))}. "
-            f"Nothing is lost. Type /late to keep going for {LATE_DEFAULT_MINUTES} minutes, or /late 45 for longer. "
+            f"Nothing is lost: it comes back in this conversation. Type /late to keep going for {LATE_DEFAULT_MINUTES} minutes, or /late 45 for longer. "
             "Sleep well."
         )
 
-    def take_morning_brief(self) -> list[dict[str, Any]]:
-        """Queued requests not yet delivered, marked delivered. Empty while it is still night.
-        During a /late override they are handed back at once, since the person chose to go on."""
+    def take_morning_brief(self, session_id: str) -> list[dict[str, Any]]:
+        """This session's queued requests not yet delivered, marked delivered. Empty while it is still
+        night. During a /late override they are handed back at once, since the person chose to go on.
+        A request is only ever given back to the conversation it was typed in."""
+        if not session_id or session_id == "*":
+            return []
         with self._lock:
             if self.is_night():
                 return []
             night = self.night()
-            items = [item for item in night.get("queued", []) if not item.get("delivered")]
+            items = [item for item in night.get("queued", [])
+                     if not item.get("delivered") and _mine(item.get("session_id"), session_id)]
             for item in items:
                 item["delivered"] = True
                 item["delivered_at"] = self.now().isoformat()
@@ -1054,10 +1137,10 @@ class Syrinx:
         if by_kind.get("delegate"):
             lines.append(f"Subagents started: {len(by_kind['delegate'])}.")
         if not outward:
-            lines.append("Nothing left your machine.")
+            lines.append("No outward action seen.")
         debt = self.assumption_debt(session_id)
         if debt:
-            waiting = len(self.parked_open()) or len(self.handed_back_open())
+            waiting = len(self.parked_open(session_id or "*")) or len(self.handed_back_open(session_id or "*"))
             lines.append(f"Built on {waiting} unconfirmed default{'s' if waiting != 1 else ''}: {debt} step{'s' if debt != 1 else ''}. "
                          "Changing an answer may mean redoing them.")
         return lines
@@ -1076,7 +1159,8 @@ class Syrinx:
     def assumption_debt(self, session_id: str) -> int:
         """How many changing steps (edits, commands, outward actions) were taken after the first
         question was parked and before it was answered. The cost of a wrong default grows with this."""
-        waiting = [item for item in self._get("parked", []) if item.get("status") in ("parked", "handed_back")]
+        waiting = [item for item in self._get("parked", []) if item.get("status") in ("parked", "handed_back")
+                   and _mine(item.get("session_id"), session_id or "*")]
         if not waiting:
             return 0
         first = min(str(item.get("created", "")) for item in waiting)
@@ -1105,7 +1189,7 @@ class Syrinx:
             lines += [f"  {line}" for line in report]
         if reply:
             lines.append(f"Last reply: {reply[:300]}")
-        open_items = self.parked_open()
+        open_items = self.parked_open(session_id or "*")
         if open_items:
             lines.append(f"{len(open_items)} question{'s' if len(open_items) != 1 else ''} parked for you:")
             for item in open_items:
@@ -1129,7 +1213,7 @@ class Syrinx:
     def return_context(self, session_id: str) -> str:
         """Context injected into the first turn after a focus block, so the agent presents the
         catch-up and asks every parked question in one card."""
-        handed = self.hand_back()
+        handed = self.hand_back(session_id)
         focus = self._get("focus", {})
         kept = fmt_minutes(int(focus.get("last_minutes", 0)))
         lines = [
@@ -1149,7 +1233,7 @@ class Syrinx:
             )
             for item in handed:
                 lines.append(f"- {item['id']}: {item['question']} (default used: {item['default']})")
-        held = self.offer_held()
+        held = self.offer_held(session_id)
         if held:
             labels = ", ".join(dict.fromkeys(item["label"] for item in held))
             where = "Put one more question per held action on the SAME card" if handed else \
@@ -1165,7 +1249,7 @@ class Syrinx:
             lines.append("No questions were parked.")
         return "\n".join(lines)
 
-    def morning_context(self, items: list[dict[str, Any]], *, late: bool = False) -> str:
+    def morning_context(self, items: list[dict[str, Any]], *, late: bool = False, session_id: str = "*") -> str:
         count = f"{len(items)} request{'s' if len(items) != 1 else ''}"
         if late:
             lines = [
@@ -1187,7 +1271,7 @@ class Syrinx:
             if kept or parked:
                 lines.append(f"Also tell them in one short line: yesterday Syrinx kept {fmt_minutes(kept)} of focus "
                              f"and parked {parked} question{'s' if parked != 1 else ''}.")
-            waiting = len(self.parked_open())
+            waiting = len(self.parked_open(session_id))
             if waiting:
                 lines.append(f"{waiting} parked question{'s are' if waiting != 1 else ' is'} still waiting; "
                              "mention /catchup.")

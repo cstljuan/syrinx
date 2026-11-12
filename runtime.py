@@ -23,6 +23,17 @@ PRESENCE_CACHE_SECONDS = 10
 _PLUGIN_DIR = Path(__file__).resolve().parent
 
 DEBT_LIMIT = 25      # changing steps built on unconfirmed defaults before the agent is told to stop
+NIGHT_LOCAL_PLATFORMS = ("cli", "tui", "desktop")   # where a person sits at this machine
+OWNERS_MAX = 500     # subagent sessions remembered with the conversation that started them
+
+
+def parse_platforms(value: Any) -> frozenset[str]:
+    """``night_platforms``: a comma-separated string or a list of platform names, lower-cased."""
+    if isinstance(value, (list, tuple, set, frozenset)):
+        parts = [str(item) for item in value]
+    else:
+        parts = str(value or "").split(",")
+    return frozenset(part.strip().lower() for part in parts if part.strip())
 
 HELP = (
     "Syrinx commands\n"
@@ -93,7 +104,7 @@ class Runtime:
         config = {}
         for key, default in (("cutoff", "22:30"), ("wake", "08:00"), ("focus_minutes", 45), ("night_enabled", True),
                              ("auto_focus", False), ("auto_focus_minutes", 30), ("hermes_apps", ""),
-                             ("question_budget", 0), ("hold_outward", True)):
+                             ("question_budget", 0), ("hold_outward", True), ("night_platforms", "")):
             try:
                 config[key] = ctx.get_config(key, default=default)
             except Exception:
@@ -104,6 +115,40 @@ class Runtime:
         self._presence_run = presence._run
         self._presence_checked = 0.0
         self._hermes_apps = presence.parse_apps(config.get("hermes_apps"))
+        self._night_platforms = parse_platforms(config.get("night_platforms"))
+        self._owners: dict[str, str] = {}
+
+    # ----- whose turn is this ----------------------------------------------------------------
+
+    def _note_parent(self, session_id: str, parent_session_id: str) -> None:
+        """A subagent runs in a session of its own. Remember which conversation started it, so what
+        it parks or has held is handed back there, and nowhere else."""
+        if not session_id or not parent_session_id or session_id == parent_session_id:
+            return
+        with self._lock:
+            if len(self._owners) >= OWNERS_MAX:
+                self._owners.pop(next(iter(self._owners)))
+            self._owners[session_id] = parent_session_id
+
+    def _sid(self, session_id: str = "", task_id: str = "") -> str:
+        """The conversation a hook call belongs to: the session, or the one that delegated to it."""
+        sid = session_id or task_id or ""
+        for _ in range(8):
+            parent = self._owners.get(sid)
+            if not parent:
+                break
+            sid = parent
+        return sid
+
+    def _night_applies(self, platform: str, parent_session_id: str) -> bool:
+        """The cutoff is for a person sitting at this machine. It applies on the interactive local
+        surfaces (cli, tui, desktop) and on platforms the user opted in to with ``night_platforms``.
+        Messaging platforms, the API server, kanban workers, subagents and any run with no platform
+        are never refused."""
+        if parent_session_id:
+            return False
+        name = str(platform or "").strip().lower()
+        return bool(name) and (name in NIGHT_LOCAL_PLATFORMS or name in self._night_platforms)
 
     # ----- presence (auto-focus) -------------------------------------------------------------
 
@@ -188,14 +233,14 @@ class Runtime:
                       session_id: str = "", **kwargs: Any) -> Optional[dict]:
         try:
             if tool_name == "clarify":
-                directive = self.k.clarify_directive(args or {}, session_id=session_id or task_id)
+                directive = self.k.clarify_directive(args or {}, session_id=self._sid(session_id, task_id))
                 if directive is not None:
                     self._changed("parked")
                 return directive
             if tool_name.startswith("syrinx_") or self._in_cron():
                 return None
-            # Hold: during a focus block nothing leaves the machine. Unattended runs are never held.
-            directive = self.k.hold_directive(tool_name, args or {}, session_id=session_id or task_id)
+            # Hold: during a focus block the known outward actions wait. Unattended runs are never held.
+            directive = self.k.hold_directive(tool_name, args or {}, session_id=self._sid(session_id, task_id))
             if directive is not None:
                 self._changed("held")
             return directive
@@ -234,22 +279,29 @@ class Runtime:
                 return
             if tool_name == "clarify":
                 self._learn_from_clarify(args, result)
-            self.k.record_tool(session_id or task_id, tool_name, args, duration_ms=duration_ms)
+            self.k.record_tool(self._sid(session_id, task_id), tool_name, args, duration_ms=duration_ms)
             self.presence_tick()
         except Exception:
             logger.debug("syrinx: post_tool_call failed", exc_info=True)
 
     def pre_llm_call(self, session_id: str = "", user_message: Any = "", is_first_turn: bool = False,
-                     platform: str = "", **kwargs: Any) -> Optional[Any]:
+                     platform: str = "", parent_session_id: str = "", **kwargs: Any) -> Optional[Any]:
         try:
             if self._in_cron():
                 return None
             text = user_message if isinstance(user_message, str) else ""
             contexts: list[str] = []
             self.presence_tick(force=True)
+            self._note_parent(session_id, parent_session_id)
+            if parent_session_id:
+                # A subagent's turn. Its work is counted for the conversation that started it, and
+                # that conversation gets the hand-back. Nothing is queued or handed over here.
+                return None
 
-            # Night: queue the request and stop the turn before any inference.
-            if self.k.is_night() and text.strip() and not text.lstrip().startswith("/"):
+            # Night: queue the request and stop the turn before any inference. Only for a person at
+            # this machine, and only when the request can be given back to the same conversation.
+            if (self.k.is_night() and session_id and text.strip() and not text.lstrip().startswith("/")
+                    and self._night_applies(platform, parent_session_id)):
                 self.k.queue_for_morning(text, session_id=session_id)
                 self._changed("queued")
                 return {"action": "block", "message": self.k.night_block_message()}
@@ -261,18 +313,18 @@ class Runtime:
                     contexts.append(standing)
 
             # Morning: hand over what was queued, once.
-            morning = self.k.take_morning_brief()
+            morning = self.k.take_morning_brief(session_id)
             if morning:
-                contexts.append(self.k.morning_context(morning, late=self.k.late_active()))
+                contexts.append(self.k.morning_context(morning, late=self.k.late_active(), session_id=session_id))
                 self._changed("morning")
 
             # Return from a focus block: catch-up plus the parked questions, once.
-            if self.k.take_pending_return():
+            if self.k.take_pending_return(session_id):
                 contexts.append(self.k.return_context(session_id))
                 self._changed("returned")
 
             # Answers typed in the Syrinx pane since the last turn.
-            answered = self.k.take_answered()
+            answered = self.k.take_answered(session_id)
             if answered:
                 contexts.append(self.k.answers_context(answered))
 
@@ -336,7 +388,7 @@ class Runtime:
             if not question:
                 return _json_error("question is required")
             item = self.k.park(question, str(given.get("default") or ""), str(given.get("why") or ""),
-                               session_id=session_id or task_id)
+                               session_id=self._sid(session_id, task_id))
             self._changed("parked")
             return _json({"parked": item["id"], "proceed_with": item["default"],
                           "note": "Continue with the default and say so in your reply."})
@@ -346,7 +398,7 @@ class Runtime:
     def tool_interrupt(self, args: Any = None, *, task_id: str = "", session_id: str = "", **kwargs: Any) -> str:
         try:
             given = self._tool_args(args, kwargs)
-            sid = session_id or task_id
+            sid = self._sid(session_id, task_id)
             self.k.allow_next_clarify(sid)
             self.k.park(str(given.get("question") or ""), "", str(given.get("why") or ""), session_id=sid,
                         urgent=True, source="interrupt")
@@ -371,17 +423,18 @@ class Runtime:
         except Exception as exc:
             return _json_error(f"syrinx_flow failed: {exc}")
 
-    def tool_status(self, args: Any = None, **kwargs: Any) -> str:
+    def tool_status(self, args: Any = None, *, task_id: str = "", session_id: str = "", **kwargs: Any) -> str:
         try:
             focus = self.k.focus()
+            sid = self._sid(session_id, task_id) or "*"
             return _json({
                 "focus_active": bool(focus.get("active")),
                 "focus_until": focus.get("until") if focus.get("active") else None,
                 "minutes_left": self.k.focus_remaining_minutes(),
                 "night": self.k.is_night(),
-                "parked": len(self.k.parked_open()),
+                "parked": len(self.k.parked_open(sid)),
                 # Questions already handed back to the user this turn and still waiting for an answer.
-                "handed_back_waiting": len(self.k.handed_back_open()),
+                "handed_back_waiting": len(self.k.handed_back_open(sid)),
             })
         except Exception as exc:
             return _json_error(f"syrinx_status failed: {exc}")
@@ -435,8 +488,11 @@ class Runtime:
                 llm = self._llm
         except Exception:
             llm = None
+        if not session_id:
+            return ("Syrinx cannot tell which conversation this is, so there is nothing to hand back here. "
+                    "The Syrinx pane lists everything that is parked.")
         text = self.k.catchup_text(session_id, llm=llm)
-        handed = self.k.hand_back()
+        handed = self.k.hand_back(session_id)
         if handed:
             text += "\n\nReply with your answers in one message (quote the ids), or just say \"defaults are fine\"."
         return text
@@ -587,12 +643,12 @@ def demo_text() -> str:
         k.record_tool("demo", name, args)
     clock["t"] += core.timedelta(minutes=6)
     k.hold_directive("terminal", {"command": "git push origin main"}, session_id="demo")
-    out += ["", "09:31  The agent tries git push. Syrinx holds it: nothing leaves your machine while you are away."]
+    out += ["", "09:31  The agent tries git push. Syrinx holds it until you are back."]
     clock["t"] = core.datetime(2026, 1, 5, 9, 46)
     k.focus()
     out += ["", "09:46  The block ends. " + k.status_line(), "       What the agent is told to show you, counted by code:"]
     out += ["         " + line for line in k.away_report("demo")]
-    k.take_pending_return()
+    k.take_pending_return("demo")
     k.return_context("demo")
     k.note_answer("Keep the old API route?", "Remove it")
     out += ["", "09:47  You answer the one card: Remove it, and yes, push now. The agent redoes that piece, then pushes."]

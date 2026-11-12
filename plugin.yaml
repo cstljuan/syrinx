@@ -1,5 +1,5 @@
 name: syrinx
-version: 1.1.0
+version: 1.1.1
 manifest_version: 2
 api_version: 1
 description: "Your agent is fast. Syrinx makes it wait for the right moment: it parks questions with the default taken while you are heads-down, hands them back in one card with a report counted by code, never asks a settled question again, and turns late-night requests into a morning brief."
@@ -37,6 +37,10 @@ config_schema:
     type: bool
     default: true
     description: "Queue late-night requests for the morning. Set false to keep only the focus features."
+  night_platforms:
+    type: str
+    default: ""
+    description: "Extra platforms, comma separated, where the night cutoff also applies (for example telegram). Empty means only cli, tui and desktop. Subagents, the API server and kanban workers are never refused."
   auto_focus:
     type: bool
     default: false
@@ -48,7 +52,7 @@ config_schema:
   hold_outward:
     type: bool
     default: true
-    description: "During a focus block, stop anything that would leave this machine (git push, publish, send, deploy) before it runs, and offer it back on the return card. Local commands are never held."
+    description: "During a focus block, stop a fixed list of outward actions (git push, publish, send, deploy) before they run, and offer them back on the return card. Local commands are never held. This is a guard, not a sandbox."
   question_budget:
     type: int
     default: 0

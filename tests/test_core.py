@@ -35,10 +35,13 @@ def test_focus_starts_and_expires():
     focus = k.start_focus(30)
     assert focus["active"] and focus["minutes"] == 30
     assert k.focus_remaining_minutes() == 30
+    k.record_tool("s1", "read_file", {"path": "a.py"})
     clock.advance(minutes=31)
     assert not k.focus()["active"]
-    assert k.take_pending_return() is True
-    assert k.take_pending_return() is False
+    assert k.take_pending_return("s2") is False            # took no part in the block
+    assert k.take_pending_return("") is False and k.take_pending_return("*") is False
+    assert k.take_pending_return("s1") is True
+    assert k.take_pending_return("s1") is False
     assert k.stats()["focus_minutes"] == 30
 
 
@@ -81,7 +84,7 @@ def test_return_context_hands_back_every_question_once():
     k.start_focus(10)
     k.park("Keep the old API?", "yes", "safer", session_id="s1")
     clock.advance(minutes=11)
-    assert k.take_pending_return()
+    assert k.take_pending_return("s1")
     ctx = k.return_context("s1")
     assert "ONE clarify call" in ctx and "Keep the old API?" in ctx
     assert k.parked_open() == []
@@ -109,11 +112,11 @@ def test_night_disabled_by_config():
 def test_queue_and_morning_brief_delivered_once():
     k, clock = make("2026-11-10 23:10")
     k.queue_for_morning("refactor the auth module", session_id="s1")
-    assert k.take_morning_brief() == []  # still night
+    assert k.take_morning_brief("s1") == []  # still night
     clock.t = datetime.fromisoformat("2026-11-11 08:05")
-    items = k.take_morning_brief()
+    items = k.take_morning_brief("s1")
     assert len(items) == 1 and items[0]["text"] == "refactor the auth module"
-    assert k.take_morning_brief() == []
+    assert k.take_morning_brief("s1") == []
     assert "11:10 PM" in k.morning_context(items)
 
 
@@ -172,12 +175,12 @@ def test_pane_answers_are_delivered_once_and_snapshot_is_complete():
     k, _ = make()
     k.start_focus(10)
     item = k.park("Tabs or spaces?", "spaces", session_id="s1")
-    assert k.take_answered() == []
+    assert k.take_answered("s1") == []
     assert k.answer("nope", "x") is None
     assert k.answer(item["id"], "tabs")["status"] == "answered"
-    fresh = k.take_answered()
+    fresh = k.take_answered("s1")
     assert len(fresh) == 1 and fresh[0]["answer"] == "tabs"
-    assert k.take_answered() == []
+    assert k.take_answered("s1") == []
     assert "tabs" in k.answers_context(fresh)
     snap = k.snapshot()
     assert snap["focus"]["active"] and snap["night"]["cutoff"] == "22:30"
@@ -253,7 +256,7 @@ def test_answer_in_chat_closes_a_handed_back_question_and_always_from_parked():
     k.start_focus(10)
     item = k.park("Keep the old API?", "yes", session_id="s1")
     clock.advance(minutes=11)
-    k.take_pending_return()
+    k.take_pending_return("s1")
     k.return_context("s1")
     assert len(k.handed_back_open()) == 1
     k.note_answer("Keep the old API?", "no, remove it")
@@ -290,7 +293,7 @@ def test_question_budget_parks_the_extra_cards_and_hands_them_back():
     over = k.clarify_directive({"questions": [{"question": "Which tier?", "choices": ["small", "large"]}]}, session_id="s1")
     assert over["action"] == "block" and "1 question cards an hour" in over["message"]
     assert k.parked_open()[0]["default"] == "small"
-    assert k.take_pending_return() is True and k.take_pending_return() is False
+    assert k.take_pending_return("s1") is True and k.take_pending_return("s1") is False
     clock.advance(minutes=61)
     assert k.clarify_directive(card, session_id="s1") is None              # an hour later the budget is back
     k.set_budget(0)
@@ -318,7 +321,7 @@ def test_morning_brief_carries_yesterday():
     clock.t = datetime.fromisoformat("2026-11-10 23:10")
     k.queue_for_morning("write the report", session_id="s1")
     clock.t = datetime.fromisoformat("2026-11-11 08:05")
-    text = k.morning_context(k.take_morning_brief())
+    text = k.morning_context(k.take_morning_brief("s1"))
     assert "write the report" in text and "yesterday Syrinx kept 1 h" in text and "still waiting" in text
 
 
@@ -332,7 +335,7 @@ def test_away_report_is_counted_and_flags_what_left_the_machine():
     k.record_tool("s1", "web_search", {"query": "fastapi lifespan"})
     quiet = k.away_report("s1")
     assert "Files changed (2 edits): app.py, test_app.py." in quiet and "Commands run (1): pytest." in quiet
-    assert "Nothing left your machine." in quiet and not any("unconfirmed" in line for line in quiet)
+    assert "No outward action seen." in quiet and not any("unconfirmed" in line for line in quiet)
     # A parked default, then more work on top of it, then a push.
     clock.advance(minutes=1)
     k.park("Keep the old API?", "yes", session_id="s1")
@@ -356,7 +359,7 @@ def test_away_report_is_counted_and_flags_what_left_the_machine():
     stale_clock.advance(hours=2)
     assert stale.snapshot()["away"] == []                 # two hours later: old news
     clock.advance(minutes=31)
-    assert k.take_pending_return()
+    assert k.take_pending_return("s1")
     context = k.return_context("s1")
     assert "Counted by Syrinx" in context and "git push" in context
     # Another block starts clean.
@@ -397,5 +400,77 @@ def test_hold_labels_only_what_leaves_the_machine():
     assert k.hold_directive("terminal", {"command": "git push"}, session_id="s1")["action"] == "block"
     assert k.snapshot()["held"] == [{"label": "git push", "tries": 1}] and k.snapshot()["hold"] is True
     clock.advance(minutes=21)
-    assert k.take_pending_return() and "Run git push now?" in k.return_context("s1")
+    assert k.take_pending_return("s1") and "Run git push now?" in k.return_context("s1")
     assert k.snapshot()["held"] == []
+
+
+def test_hand_back_goes_only_to_the_session_that_parked():
+    """Two people share one profile. Neither is ever handed the other's questions or held actions."""
+    k, clock = make()
+    k.start_focus(20)
+    mine = k.park("Keep the old API?", "yes", session_id="alice")
+    theirs = k.park("Delete the staging bucket?", "no", session_id="bob")
+    nobody = k.park("Which region?", "eu", session_id="")
+    assert k.hold_directive("terminal", {"command": "git push"}, session_id="alice")["action"] == "block"
+    assert k.hold_directive("terminal", {"command": "npm publish"}, session_id="bob")["action"] == "block"
+    k.record_tool("alice", "write_file", {"path": "api.py"})
+    k.record_tool("bob", "terminal", {"command": "pytest"})
+    clock.advance(minutes=21)
+
+    assert k.take_pending_return("carol") is False        # was not there
+    k.record_tool("dave", "read_file", {"path": "later.py"})
+    assert k.take_pending_return("dave") is False         # only worked after the block had ended
+    assert k.take_pending_return("alice") is True
+    alice = k.return_context("alice")
+    assert mine["id"] in alice and "git push" in alice
+    assert theirs["id"] not in alice and "staging bucket" not in alice and "package publish" not in alice
+    assert nobody["id"] not in alice
+    assert "api.py" in alice and "pytest" not in alice     # the counted list is her own tool calls
+
+    # Bob's are untouched and still waiting for Bob.
+    assert [item["id"] for item in k.parked_open("bob")] == [theirs["id"]]
+    assert [item["label"] for item in k.held_open("bob")] == ["package publish"]
+    assert k.take_pending_return("bob") is True
+    bob = k.return_context("bob")
+    assert theirs["id"] in bob and "package publish" in bob and mine["id"] not in bob and "git push" not in bob
+    assert k.take_pending_return("alice") is False and k.take_pending_return("bob") is False
+
+    # The pane has no session: it shows everything, including the question nobody owns.
+    assert [item["id"] for item in k.parked_open()] == [nobody["id"]]
+    assert k.hand_back("*") == [] and k.offer_held("*") == []          # display only, never a hand-over
+    assert "Which region?" not in k.catchup_text("alice")
+
+
+def test_morning_queue_and_pane_answers_stay_with_their_session():
+    k, clock = make("2026-11-10 23:10")
+    k.queue_for_morning("refactor the auth module", session_id="alice")
+    k.queue_for_morning("email the landlord about the lease", session_id="bob")
+    clock.advance(hours=9, minutes=30)
+    assert k.take_morning_brief("") == [] and k.take_morning_brief("*") == []
+    assert k.take_morning_brief("carol") == []
+    alice = k.take_morning_brief("alice")
+    assert [item["text"] for item in alice] == ["refactor the auth module"]
+    assert "landlord" not in k.morning_context(alice, session_id="alice")
+    assert [item["text"] for item in k.queued_open()] == ["email the landlord about the lease"]
+    assert [item["text"] for item in k.take_morning_brief("bob")] == ["email the landlord about the lease"]
+    assert k.take_morning_brief("alice") == [] and k.queued_open() == []
+
+    k2, _ = make()
+    item = k2.park("Tabs or spaces?", "spaces", session_id="alice")
+    k2.answer(item["id"], "tabs")
+    assert k2.take_answered("bob") == [] and k2.take_answered("*") == []
+    assert [got["answer"] for got in k2.take_answered("alice")] == ["tabs"]
+
+
+def test_heredoc_strip_is_linear_and_still_drops_bodies():
+    import time as _time
+    script = "cat > greet.py <<'EOF'\nimport os\nrm -rf everything\nEOF\npython3 greet.py && git add -A"
+    assert core.command_programs(script) == ["cat", "python3", "git"]
+    assert core.strip_heredocs("cat <<EOFX\nbody\nEOF\nEOFX\necho done").strip().endswith("echo done")
+    assert core.command_programs("cat <<EOF\nnever closed\npython3 x.py") == ["cat", "never", "python3"]
+    hostile = "echo " + "<< a " * 40000                    # one long line, openers and no terminator
+    started = _time.perf_counter()
+    core.command_programs(hostile)
+    core.strip_heredocs(hostile)
+    core.classify_tool_call("terminal", {"command": hostile})
+    assert _time.perf_counter() - started < 0.5

@@ -319,7 +319,7 @@ def test_demo_runs_the_real_rules_without_touching_state(rt):
     r, ctx, _ = rt
     before = dict(ctx.state.data)
     text = ctx.commands["syrinx"]("demo")
-    assert "use: pnpm" in text and "Held for you, did not run (1): git push." in text and "Nothing left your machine." in text
+    assert "use: pnpm" in text and "Held for you, did not run (1): git push." in text and "No outward action seen." in text
     assert "Built on 1 unconfirmed default" in text and "queued this for the morning brief" in text
     assert "Syrinx receipt" in text and "Questions you never had to answer again: 1." in text
     assert ctx.state.data == before
@@ -364,7 +364,7 @@ def test_hold_stops_a_push_during_a_flow_and_offers_it_back_on_the_card(rt):
     assert [item["tries"] for item in r.k.held_open()] == [2]
     assert "1 held" in r.k.status_line()
     assert r.k.away_report("s1")[0] == "Held for you, did not run (1): git push."
-    assert "Nothing left your machine." in r.k.away_report("s1")
+    assert "No outward action seen." in r.k.away_report("s1")
     clock["t"] = datetime.fromisoformat("2026-11-10 15:31")
     back = llm(session_id="s1", user_message="I'm back")["context"]
     assert "HELD 1 action" in back and "Run git push now?" in back and "ONE clarify call" in back
@@ -387,3 +387,66 @@ def test_hold_can_be_turned_off_and_never_touches_unattended_runs(rt):
     assert "Hold off" in ctx.commands["syrinx"]("hold off")
     assert pre(tool_name="terminal", args={"command": "npm publish"}, session_id="s1") is None
     assert "Hold on" in ctx.commands["syrinx"]("hold on") and "send_message" in ctx.commands["syrinx"]("hold")
+
+
+def test_night_block_is_only_for_a_person_at_this_machine(rt):
+    """After the cutoff a local chat is queued. Messaging users, the API server, kanban workers and
+    subagents are never refused."""
+    r, ctx, clock = rt
+    clock["t"] = datetime.fromisoformat("2026-11-10 23:05")
+    hook = ctx.hooks["pre_llm_call"]
+    for platform in ("telegram", "discord", "slack", "api_server", "kanban", "acp", ""):
+        assert hook(session_id=f"s-{platform}", user_message="are you there?", platform=platform) is None
+    assert hook(session_id="child", user_message="do the subtask", platform="cli", parent_session_id="s1") is None
+    assert r.k.queued_open() == []
+    for platform in ("cli", "tui", "desktop"):
+        assert hook(session_id=f"s-{platform}", user_message="late idea", platform=platform)["action"] == "block"
+    assert len(r.k.queued_open()) == 3
+    assert hook(session_id="", user_message="no session to give it back to", platform="cli") is None
+
+
+def test_night_platforms_setting_opts_a_messaging_platform_in():
+    ctx = FakeCtx()
+    ctx.config["night_platforms"] = "Telegram, signal"
+    r = syrinx_pkg.register(ctx)
+    r.k._now = lambda: datetime.fromisoformat("2026-11-10 23:05")
+    hook = ctx.hooks["pre_llm_call"]
+    assert hook(session_id="t1", user_message="late idea", platform="telegram")["action"] == "block"
+    assert hook(session_id="d1", user_message="late idea", platform="discord") is None
+
+
+def test_one_session_never_receives_another_sessions_hand_back_or_brief(rt):
+    r, ctx, clock = rt
+    hook, pre_tool = ctx.hooks["pre_llm_call"], ctx.hooks["pre_tool_call"]
+    r.k.start_focus(30)
+    card = {"questions": [{"question": "Which database?", "choices": ["postgres", "sqlite"]}]}
+    assert pre_tool(tool_name="clarify", args=card, session_id="alice")["action"] == "block"
+    assert pre_tool(tool_name="terminal", args={"command": "git push origin main"}, session_id="alice")["action"] == "block"
+    clock["t"] = datetime.fromisoformat("2026-11-10 15:31")
+
+    # Bob writes first after the block. He took no part in it and gets nothing of Alice's.
+    assert hook(session_id="bob", user_message="hello", platform="telegram") is None
+    back = hook(session_id="alice", user_message="back", platform="desktop")["context"]
+    assert "Which database?" in back and "Run git push now?" in back
+    assert hook(session_id="alice", user_message="next", platform="desktop") is None
+
+    # Night: Alice's queued request is delivered to Alice only.
+    clock["t"] = datetime.fromisoformat("2026-11-10 23:05")
+    assert hook(session_id="alice", user_message="rename the billing module", platform="desktop")["action"] == "block"
+    clock["t"] = datetime.fromisoformat("2026-11-11 08:30")
+    assert hook(session_id="bob", user_message="morning", platform="telegram") is None
+    assert "rename the billing module" in hook(session_id="alice", user_message="morning", platform="desktop")["context"]
+
+
+def test_a_subagents_held_action_is_offered_to_the_conversation_that_started_it(rt):
+    r, ctx, clock = rt
+    hook, pre_tool, post_tool = ctx.hooks["pre_llm_call"], ctx.hooks["pre_tool_call"], ctx.hooks["post_tool_call"]
+    r.k.start_focus(30)
+    assert hook(session_id="child", user_message="ship it", platform="desktop", parent_session_id="alice") is None
+    assert pre_tool(tool_name="terminal", args={"command": "git push"}, session_id="child")["action"] == "block"
+    post_tool(tool_name="write_file", args={"path": "notes.md"}, session_id="child")
+    assert [item["session"] for item in r.k.held_open()] == ["alice"]
+    clock["t"] = datetime.fromisoformat("2026-11-10 15:31")
+    assert hook(session_id="child", user_message="again", platform="desktop", parent_session_id="alice") is None
+    back = hook(session_id="alice", user_message="back", platform="desktop")["context"]
+    assert "Run git push now?" in back and "notes.md" in back
