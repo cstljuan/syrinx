@@ -563,6 +563,9 @@ class Runtime:
         question, sep, answer = arg.partition("=")
         if not sep or not question.strip() or not answer.strip():
             return "Use /always <question> = <answer>, for example: /always tabs or spaces = spaces"
+        if self.k.asks_to_run_held(question):
+            return ("Syrinx asks before every held action runs, so that question cannot be settled for good. "
+                    "/syrinx hold off stops holding instead.")
         made = self.k.add_standing(question, answer)
         self._changed("standing")
         return f"Settled for good: {made['question']} -> {made['answer']}. The agent will not ask again."

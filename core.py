@@ -56,6 +56,15 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:6]}"
 
 
+_HELD_OFFER = re.compile(r"^\s*run\b.{1,80}\bnow\s*\??\s*$", re.I)
+
+
+def is_held_offer(question: Any) -> bool:
+    """A question that asks whether a held action may run now ("Run git push now?"). It is asked
+    every time: never learned, never suggested, never settled by a standing answer."""
+    return bool(_HELD_OFFER.match(str(question or "")))
+
+
 def _mine(owner: Any, session_id: str) -> bool:
     """Whether a stored item belongs to the asking session. ``*`` is the pane, which has no session
     of its own and may show everything; it is used for display only, never to hand anything to an
@@ -546,9 +555,20 @@ class Syrinx:
         return list(self._get("standing", []))
 
     def suggested(self) -> list[dict[str, Any]]:
-        return list(self._get("suggested", []))
+        return [item for item in self._get("suggested", []) if not self.asks_to_run_held(item.get("question"))]
+
+    def asks_to_run_held(self, question: Any) -> bool:
+        """Whether a question is the offer to run a held action. Such a question must reach the
+        person every time, so it can never become a standing answer."""
+        text = str(question or "").lower()
+        if is_held_offer(text):
+            return True
+        labels = {str(item.get("label", "")).lower() for item in self._get("held", [])}
+        return any(label and label in text for label in labels)
 
     def match_standing(self, question: Any) -> Optional[dict[str, Any]]:
+        if self.asks_to_run_held(question):
+            return None
         best, score = None, 0.0
         for item in self._get("standing", []):
             similarity = question_similarity(question, item.get("question"))
@@ -558,7 +578,7 @@ class Syrinx:
 
     def add_standing(self, question: str, answer: str, *, source: str = "user") -> Optional[dict[str, Any]]:
         question, answer = str(question or "").strip()[:300], str(answer or "").strip()[:300]
-        if not question or not answer:
+        if not question or not answer or self.asks_to_run_held(question):
             return None
         with self._lock:
             items = self._get("standing", [])
@@ -628,6 +648,8 @@ class Syrinx:
                     self._score_default(item.get("default", ""), answer)
             self._set("parked", parked)
 
+            if self.asks_to_run_held(question):
+                return None                # "Run git push now?" is asked every time, never learned
             history = self._get("answer_history", [])
             repeat = next((h for h in history if h.get("answer", "").lower() == answer.lower()
                            and question_similarity(question, h.get("question")) >= self.MATCH), None)

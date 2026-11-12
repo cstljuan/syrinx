@@ -474,3 +474,21 @@ def test_heredoc_strip_is_linear_and_still_drops_bodies():
     core.strip_heredocs(hostile)
     core.classify_tool_call("terminal", {"command": hostile})
     assert _time.perf_counter() - started < 0.5
+
+
+def test_the_offer_to_run_a_held_action_is_never_learned_or_settled():
+    """Answering "Run git push now?" the same way twice must not turn into a standing yes."""
+    k, clock = make()
+    k.start_focus(10)
+    k.hold_directive("terminal", {"command": "git push"}, session_id="s1")
+    clock.advance(minutes=11)
+    assert k.note_answer("Run git push now?", "Run it now") is None
+    assert k.note_answer("Run git push now?", "Run it now") is None
+    assert k.suggested() == []
+    assert k.add_standing("Run git push now?", "Run it now") is None
+    assert k.add_standing("Should I git push when the tests pass?", "yes") is None      # names a held action
+    assert k.standing() == []
+    assert k.clarify_directive({"questions": [{"question": "Run git push now?", "choices": ["Run it now", "Leave it"]}]},
+                               session_id="s1") is None                                   # it reaches the person
+    assert core.is_held_offer("Run package publish now?") and not core.is_held_offer("Which port?")
+    assert k.note_answer("Tabs or spaces?", "spaces") is None and k.note_answer("Tabs or spaces?", "spaces") is not None

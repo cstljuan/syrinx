@@ -450,3 +450,9 @@ def test_a_subagents_held_action_is_offered_to_the_conversation_that_started_it(
     assert hook(session_id="child", user_message="again", platform="desktop", parent_session_id="alice") is None
     back = hook(session_id="alice", user_message="back", platform="desktop")["context"]
     assert "Run git push now?" in back and "notes.md" in back
+
+
+def test_always_refuses_to_settle_the_offer_to_run_a_held_action(rt):
+    r, ctx, _ = rt
+    reply = ctx.commands["always"]("Run git push now? = Run it now")
+    assert "cannot be settled" in reply and r.k.standing() == []

@@ -46,7 +46,7 @@ The last line is **assumption debt**: how much work was stacked on answers you h
 
 ### 3. Hold: pushes, publishes and sends wait for you
 
-During a flow, the outward actions Syrinx knows about are stopped **before they run**: `git push`, a package publish, `gh pr create`, a deploy, a message or an email sent by a tool. The agent is told it is held and carries on with everything else. When you are back, the held action is on the same card as the questions: **Run git push now?** You say yes, and only then does it run.
+During a flow, the outward actions Syrinx knows about are stopped **before they run**: `git push`, a package publish, `gh pr create`, a deploy, a message or an email sent by a tool. The agent is told it is held and carries on with everything else. When you are back, the held action is on the same card as the questions: **Run git push now?** You say yes, and only then does it run. That question is asked every time: it can never be learned or settled as a standing answer.
 
 ![Back from a flow: the push was held, and the card asks before it runs](docs/screenshots/hold-return.jpg)
 
